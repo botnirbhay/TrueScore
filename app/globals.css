@@ -1,6 +1,16 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme {
+  --color-background: #f4f1ea;
+  --color-foreground: #171717;
+  --color-accent: #0f766e;
+  --color-accent-soft: #c7f0eb;
+  --color-panel: #fffdf8;
+  --color-border: #ddd5c7;
+  --shadow-card: 0 20px 60px rgba(23, 23, 23, 0.08);
+  --font-body: var(--font-body-family), sans-serif;
+  --font-heading: var(--font-heading-family), sans-serif;
+}
 
 :root {
   color-scheme: light;
@@ -17,7 +27,7 @@ html {
 body {
   margin: 0;
   min-width: 320px;
-  font-family: var(--font-body), sans-serif;
+  font-family: var(--font-body-family), sans-serif;
 }
 
 h1,
@@ -26,7 +36,7 @@ h3,
 h4,
 h5,
 h6 {
-  font-family: var(--font-heading), sans-serif;
+  font-family: var(--font-heading-family), sans-serif;
 }
 
 input,
@@ -40,9 +50,6 @@ select {
   text-wrap: balance;
 }
 
-@layer base {
-  ::selection {
-    background: rgba(15, 118, 110, 0.18);
-  }
+::selection {
+  background: rgba(15, 118, 110, 0.18);
 }
-

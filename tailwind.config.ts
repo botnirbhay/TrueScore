@@ -1,6 +1,8 @@
 import type { Config } from "tailwindcss";
 
 const config: Config = {
+  // Tailwind v4 is driven primarily by `app/globals.css` via `@theme`.
+  // This file remains useful for editor tooling and future fallback config.
   content: [
     "./app/**/*.{js,ts,jsx,tsx,mdx}",
     "./components/**/*.{js,ts,jsx,tsx,mdx}",
@@ -19,8 +21,8 @@ const config: Config = {
         border: "#ddd5c7"
       },
       fontFamily: {
-        body: ["var(--font-body)", "sans-serif"],
-        heading: ["var(--font-heading)", "sans-serif"]
+        body: ["var(--font-body-family)", "sans-serif"],
+        heading: ["var(--font-heading-family)", "sans-serif"]
       },
       boxShadow: {
         card: "0 20px 60px rgba(23, 23, 23, 0.08)"
