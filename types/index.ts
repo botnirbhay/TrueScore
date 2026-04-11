@@ -1,8 +1,36 @@
 export type AnalysisResult = {
-  submittedUrl: string;
-  hostname: string;
-  status: string;
-  summary: string;
-  checkedAt: string;
+  id: string;
+  originalUrl: string;
+  sourceSite: string | null;
+  title: string | null;
+  normalizedTitle: string | null;
+  brand: string | null;
+  image: string | null;
+  description: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
 };
 
+export type {
+  CollectedOffer,
+  CollectedReviewSnippet,
+  CollectedSourcePage,
+  CollectibleProductInput,
+  CollectorRunResult,
+  CollectorSourceType,
+  CrawlJobEntity,
+  CrawlStatus,
+  CrawlTrigger,
+  LowestPriceResult,
+  OfferEntity,
+  ProductEntity,
+  ProductScoreResult,
+  ProductScoringInput,
+  ProductSourceEntity,
+  ResultsViewModel,
+  ReviewSnippetEntity,
+  ScoreExplanationPart,
+  ScoreEntity,
+  ScoreType,
+  SourcePageType
+} from "@/types/entities";

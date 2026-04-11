@@ -1,47 +1,36 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
 
-import { ResultsPlaceholder } from "@/components/results/results-placeholder";
-import { extractHostname, isValidHttpUrl } from "@/lib/utils";
-import type { AnalysisResult } from "@/types";
+import { isValidHttpUrl } from "@/lib/utils";
 
 const initialUrl = "https://example.com/product";
 
 export function UrlSubmissionForm() {
+  const router = useRouter();
   const [url, setUrl] = useState(initialUrl);
   const [error, setError] = useState<string>("");
-  const [result, setResult] = useState<AnalysisResult | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
     const trimmedUrl = url.trim();
 
     if (!trimmedUrl) {
       setError("Enter a product URL to continue.");
-      setResult(null);
       return;
     }
 
     if (!isValidHttpUrl(trimmedUrl)) {
       setError("Enter a valid URL starting with http:// or https://.");
-      setResult(null);
       return;
     }
 
     setError("");
-
-    // Future backend integration:
-    // Replace this local object with a POST request to an API route such as
-    // `app/api/analyze/route.ts` or a server action when scoring logic exists.
-    setResult({
-      submittedUrl: trimmedUrl,
-      hostname: extractHostname(trimmedUrl),
-      status: "Ready for analysis",
-      summary: "This is a placeholder response rendered from local state.",
-      checkedAt: new Date().toLocaleString()
-    });
+    setIsLoading(true);
+    router.push(`/results?url=${encodeURIComponent(trimmedUrl)}`);
   };
 
   return (
@@ -50,7 +39,7 @@ export function UrlSubmissionForm() {
         <p className="text-sm font-medium uppercase tracking-[0.2em] text-foreground/45">Start here</p>
         <h2 className="font-heading text-2xl font-bold tracking-tight">Submit a product URL</h2>
         <p className="text-sm leading-6 text-foreground/65">
-          Enter any public product page URL. Validation stays on the client until backend analysis is connected.
+          Enter any public product page URL. The app will open a dedicated results page with scoring, pricing, and evidence cards.
         </p>
       </div>
 
@@ -81,14 +70,16 @@ export function UrlSubmissionForm() {
 
         <button
           type="submit"
+          disabled={isLoading}
           className="inline-flex w-full items-center justify-center rounded-2xl bg-foreground px-4 py-3 text-sm font-semibold text-white transition hover:opacity-90 focus:outline-none focus:ring-4 focus:ring-foreground/15 sm:w-auto sm:min-w-40"
         >
-          Analyze URL
+          {isLoading ? "Opening Results..." : "View Results"}
         </button>
       </form>
 
-      <ResultsPlaceholder result={result} />
+      <div className="mt-8 rounded-3xl border border-dashed border-border bg-background/70 p-4 text-sm leading-7 text-foreground/65">
+        Results render on a dedicated page with trust score, confidence, evidence cards, price comparisons, and an in-memory fallback when live saved data is incomplete.
+      </div>
     </div>
   );
 }
-

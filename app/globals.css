@@ -8,8 +8,8 @@
   --color-panel: #fffdf8;
   --color-border: #ddd5c7;
   --shadow-card: 0 20px 60px rgba(23, 23, 23, 0.08);
-  --font-body: var(--font-body-family), sans-serif;
-  --font-heading: var(--font-heading-family), sans-serif;
+  --font-body: "Aptos", "Segoe UI", "Helvetica Neue", sans-serif;
+  --font-heading: "Bahnschrift", "Aptos Display", "Trebuchet MS", sans-serif;
 }
 
 :root {
@@ -27,7 +27,7 @@ html {
 body {
   margin: 0;
   min-width: 320px;
-  font-family: var(--font-body-family), sans-serif;
+  font-family: var(--font-body);
 }
 
 h1,
@@ -36,7 +36,7 @@ h3,
 h4,
 h5,
 h6 {
-  font-family: var(--font-heading-family), sans-serif;
+  font-family: var(--font-heading);
 }
 
 input,
