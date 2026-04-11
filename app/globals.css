@@ -1,19 +1,25 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
-  --color-background: #f4f1ea;
-  --color-foreground: #171717;
-  --color-accent: #0f766e;
-  --color-accent-soft: #c7f0eb;
-  --color-panel: #fffdf8;
-  --color-border: #ddd5c7;
-  --shadow-card: 0 20px 60px rgba(23, 23, 23, 0.08);
+  --color-background: #09090b;
+  --color-foreground: #fafafa;
+  --color-muted: #a1a1aa;
+  --color-accent: #2dd4bf;
+  --color-accent-strong: #14b8a6;
+  --color-accent-soft: rgba(45, 212, 191, 0.14);
+  --color-panel: #111318;
+  --color-panel-elevated: #18181b;
+  --color-border: #27272a;
+  --color-danger: #f87171;
+  --shadow-card: 0 24px 80px rgba(0, 0, 0, 0.38);
   --font-body: "Aptos", "Segoe UI", "Helvetica Neue", sans-serif;
   --font-heading: "Bahnschrift", "Aptos Display", "Trebuchet MS", sans-serif;
 }
 
 :root {
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 * {
@@ -22,12 +28,37 @@
 
 html {
   scroll-behavior: smooth;
+  background: var(--color-background);
 }
 
 body {
   margin: 0;
   min-width: 320px;
   font-family: var(--font-body);
+  color: var(--color-foreground);
+  background-color: var(--color-background);
+  background-image:
+    radial-gradient(circle at top, rgba(45, 212, 191, 0.18), transparent 28%),
+    radial-gradient(circle at 85% 18%, rgba(59, 130, 246, 0.14), transparent 20%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.015), rgba(255, 255, 255, 0));
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size: 72px 72px;
+  mask-image: radial-gradient(circle at center, black 35%, transparent 88%);
+  opacity: 0.18;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
 }
 
 h1,
@@ -51,5 +82,5 @@ select {
 }
 
 ::selection {
-  background: rgba(15, 118, 110, 0.18);
+  background: rgba(45, 212, 191, 0.22);
 }

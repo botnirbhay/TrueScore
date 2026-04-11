@@ -6,11 +6,10 @@ type EvidenceCardProps = {
 
 export function EvidenceCard({ title, eyebrow, children }: EvidenceCardProps) {
   return (
-    <article className="rounded-3xl border border-border bg-white p-5 shadow-card">
-      {eyebrow ? <p className="text-xs font-semibold uppercase tracking-[0.2em] text-foreground/45">{eyebrow}</p> : null}
-      <h3 className="mt-2 font-heading text-xl font-semibold tracking-tight text-foreground">{title}</h3>
+    <article className="rounded-[1.8rem] border border-white/10 bg-white/[0.045] p-5 shadow-card backdrop-blur xl:p-6">
+      {eyebrow ? <p className="text-xs font-semibold uppercase tracking-[0.22em] text-gray-500">{eyebrow}</p> : null}
+      <h3 className="mt-2 font-heading text-xl font-semibold tracking-tight text-white">{title}</h3>
       <div className="mt-4">{children}</div>
     </article>
   );
 }
-

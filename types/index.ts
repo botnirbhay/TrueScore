@@ -23,6 +23,8 @@ export type {
   CrawlTrigger,
   LowestPriceResult,
   OfferEntity,
+  ProcessingJob,
+  ProcessingJobStatus,
   ProductEntity,
   ProductScoreResult,
   ProductScoringInput,

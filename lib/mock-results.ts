@@ -172,27 +172,39 @@ export function buildMockResultsModel(product: AnalysisResult): ResultsViewModel
     }
   ];
 
-  const score = scoreProduct({
-    product: {
-      originalUrl: product.originalUrl,
-      sourceSite: product.sourceSite,
-      title,
-      brand,
-      normalizedTitle: product.normalizedTitle,
-      description
-    },
-    reviewSnippets: reviews,
-    offers
-  });
-
-  return {
-    product: {
+  return buildResultsModelFromEvidence(
+    {
       ...product,
       title,
       brand,
       description
     },
-    reviewSnippets: reviews,
+    reviews,
+    offers
+  );
+}
+
+export function buildResultsModelFromEvidence(
+  product: AnalysisResult,
+  reviewSnippets: CollectedReviewSnippet[],
+  offers: CollectedOffer[]
+): ResultsViewModel {
+  const score = scoreProduct({
+    product: {
+      originalUrl: product.originalUrl,
+      sourceSite: product.sourceSite,
+      title: product.title,
+      brand: product.brand,
+      normalizedTitle: product.normalizedTitle,
+      description: product.description
+    },
+    reviewSnippets,
+    offers
+  });
+
+  return {
+    product,
+    reviewSnippets,
     offers,
     score
   };
