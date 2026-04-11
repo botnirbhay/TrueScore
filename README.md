@@ -1,4 +1,4 @@
-🛍️ [TrueScore]
+🛍️ [Your App Name]
 
 Know what a product is really like before you buy it.
 
