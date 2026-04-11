@@ -97,18 +97,6 @@ To become the **trust layer for online shopping**, helping users confidently ans
 * 🌍 More data sources (Reddit, YouTube, forums)
 * ⭐ Personalized recommendations
 
----
-
-## ⚡ Getting Started
-
-```bash
-git clone https://github.com/your-username/truescore.git
-cd truescore
-npm install
-npm run dev
-```
-
----
 
 ## 🤝 Contributing
 
