@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: #f4f1ea;
+  --color-foreground: #171717;
+  --color-accent: #0f766e;
+  --color-accent-soft: #c7f0eb;
+  --color-panel: #fffdf8;
+  --color-border: #ddd5c7;
+  --shadow-card: 0 20px 60px rgba(23, 23, 23, 0.08);
+  --font-body: "Aptos", "Segoe UI", "Helvetica Neue", sans-serif;
+  --font-heading: "Bahnschrift", "Aptos Display", "Trebuchet MS", sans-serif;
+}
+
+:root {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  font-family: var(--font-body);
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-heading);
+}
+
+input,
+button,
+textarea,
+select {
+  font: inherit;
+}
+
+.text-balance {
+  text-wrap: balance;
+}
+
+::selection {
+  background: rgba(15, 118, 110, 0.18);
+}

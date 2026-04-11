@@ -1,0 +1,209 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum CrawlStatus {
+  PENDING
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  PARTIAL
+  FAILED
+  SKIPPED
+}
+
+enum CrawlTrigger {
+  MANUAL
+  SCHEDULED
+  REPROCESS
+}
+
+enum SourcePageType {
+  PRODUCT_PAGE
+  REVIEW_PAGE
+  OFFER_PAGE
+  BRAND_PAGE
+  OTHER
+}
+
+enum ScoreType {
+  OVERALL
+  QUALITY
+  VALUE
+  TRUST
+  REVIEW_SIGNAL
+}
+
+model Product {
+  id                String           @id @default(cuid())
+  originalUrl       String
+  canonicalUrl      String?
+  slug              String?          @unique
+  sourceSite        String?
+  title             String?
+  brand             String?
+  imageUrl          String?
+  normalizedBrand   String?
+  normalizedTitle   String?
+  normalizedSku     String?
+  normalizedCategory String?
+  metadata          Json?
+  normalizedAttributes Json?
+  description       String?          @db.Text
+  qualityTags       String[]         @default([])
+  confidenceScore   Float?
+  crawlStatus       CrawlStatus      @default(PENDING)
+  lastCrawledAt     DateTime?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  productSources    ProductSource[]
+  reviewSnippets    ReviewSnippet[]
+  offers            Offer[]
+  scores            Score[]
+  crawlJobs         CrawlJob[]
+
+  @@index([sourceSite])
+  @@index([normalizedBrand])
+  @@index([normalizedTitle])
+  @@index([normalizedSku])
+  @@index([crawlStatus])
+}
+
+model ProductSource {
+  id               String           @id @default(cuid())
+  productId        String
+  sourceSite       String
+  sourceUrl        String
+  pageType         SourcePageType   @default(PRODUCT_PAGE)
+  externalId       String?
+  sourceBrand      String?
+  sourceTitle      String?
+  sourceSku        String?
+  sourceCategory   String?
+  availability     String?
+  rawPayload       Json?
+  extractedPayload Json?
+  qualityTags      String[]         @default([])
+  confidenceScore  Float?
+  lastFetchedAt    DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  product          Product          @relation(fields: [productId], references: [id], onDelete: Cascade)
+  reviewSnippets   ReviewSnippet[]
+  offers           Offer[]
+  scores           Score[]
+  crawlJobs        CrawlJob[]
+
+  @@unique([sourceSite, sourceUrl])
+  @@index([productId])
+  @@index([sourceSite])
+  @@index([externalId])
+}
+
+model ReviewSnippet {
+  id              String         @id @default(cuid())
+  productId       String
+  productSourceId String?
+  sourceSite      String?
+  authorName      String?
+  reviewTitle     String?
+  reviewText      String         @db.Text
+  ratingValue     Float?
+  ratingScale     Float?
+  qualityTags     String[]       @default([])
+  sentimentLabel  String?
+  confidenceScore Float?
+  publishedAt     DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  product         Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productSource   ProductSource? @relation(fields: [productSourceId], references: [id], onDelete: SetNull)
+
+  @@index([productId])
+  @@index([productSourceId])
+  @@index([sourceSite])
+}
+
+model Offer {
+  id              String         @id @default(cuid())
+  productId       String
+  productSourceId String?
+  sourceSite      String
+  merchantName    String?
+  offerUrl        String?
+  sku             String?
+  condition       String?
+  availability    String?
+  currency        String
+  price           Decimal        @db.Decimal(10, 2)
+  shipping        Decimal?       @db.Decimal(10, 2)
+  totalPrice      Decimal?       @db.Decimal(10, 2)
+  qualityTags     String[]       @default([])
+  confidenceScore Float?
+  isPrimary       Boolean        @default(false)
+  observedAt      DateTime       @default(now())
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  product         Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productSource   ProductSource? @relation(fields: [productSourceId], references: [id], onDelete: SetNull)
+
+  @@index([productId])
+  @@index([productSourceId])
+  @@index([sourceSite])
+  @@index([currency])
+}
+
+model Score {
+  id              String         @id @default(cuid())
+  productId       String
+  productSourceId String?
+  scoreType       ScoreType      @default(OVERALL)
+  sourceSite      String?
+  value           Float
+  confidenceScore Float?
+  rationale       String?        @db.Text
+  qualityTags     String[]       @default([])
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  product         Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productSource   ProductSource? @relation(fields: [productSourceId], references: [id], onDelete: SetNull)
+
+  // Future expansion:
+  // add a version field or metric breakdown JSON if scoring becomes multi-stage.
+  @@index([productId])
+  @@index([productSourceId])
+  @@index([scoreType])
+}
+
+model CrawlJob {
+  id              String         @id @default(cuid())
+  productId       String?
+  productSourceId String?
+  originalUrl     String
+  sourceSite      String?
+  status          CrawlStatus    @default(PENDING)
+  triggerType     CrawlTrigger   @default(MANUAL)
+  attemptCount    Int            @default(0)
+  maxAttempts     Int            @default(3)
+  requestPayload  Json?
+  responsePayload Json?
+  errorMessage    String?        @db.Text
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  product         Product?       @relation(fields: [productId], references: [id], onDelete: SetNull)
+  productSource   ProductSource? @relation(fields: [productSourceId], references: [id], onDelete: SetNull)
+
+  // Future expansion:
+  // add worker identifiers, retry backoff metadata, or crawl depth settings.
+  @@index([productId])
+  @@index([productSourceId])
+  @@index([status, createdAt])
+}
