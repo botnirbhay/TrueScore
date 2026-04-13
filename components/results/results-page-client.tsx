@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { ResultsDashboard } from "@/components/results/results-dashboard";
@@ -34,13 +33,16 @@ type JobPayload = {
   error?: string;
 };
 
-export function ResultsPageClient() {
-  const searchParams = useSearchParams();
+type ResultsPageClientProps = {
+  initialUrl: string;
+};
+
+export function ResultsPageClient({ initialUrl }: ResultsPageClientProps) {
   const [state, setState] = useState<PageState>({ status: "idle" });
   const pollingJobId = state.status === "processing" ? state.jobId : null;
 
   useEffect(() => {
-    const requestedUrl = searchParams.get("url")?.trim() ?? "";
+    const requestedUrl = initialUrl.trim();
 
     if (!requestedUrl) {
       setState({ status: "idle" });
@@ -116,7 +118,7 @@ export function ResultsPageClient() {
     return () => {
       cancelled = true;
     };
-  }, [searchParams]);
+  }, [initialUrl]);
 
   useEffect(() => {
     if (state.status !== "processing") {
