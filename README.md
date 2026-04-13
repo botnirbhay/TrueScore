@@ -99,17 +99,6 @@ To become the **trust layer for online shopping**, helping users confidently ans
 
 ---
 
-## ⚡ Getting Started
-
-```bash
-git clone https://github.com/your-username/truescore.git
-cd truescore
-npm install
-npm run dev
-```
-
----
-
 ## 🤝 Contributing
 
 Contributions are welcome!
