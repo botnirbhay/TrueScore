@@ -251,3 +251,17 @@ export type ResultsViewModel = {
   offers: CollectedOffer[];
   score: ProductScoreResult;
 };
+
+export type ProcessingJobStatus = "queued" | "crawling" | "scoring" | "complete" | "failed";
+
+export type ProcessingJob = {
+  id: string;
+  url: string;
+  status: ProcessingJobStatus;
+  createdAt: string;
+  updatedAt: string;
+  message: string;
+  cached: boolean;
+  error: string | null;
+  result: ResultsViewModel | null;
+};

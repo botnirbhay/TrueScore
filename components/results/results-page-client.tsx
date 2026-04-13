@@ -1,30 +1,51 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { ResultsDashboard } from "@/components/results/results-dashboard";
-import { ResultsEmptyState, ResultsErrorState, ResultsLoadingState } from "@/components/results/results-states";
-import { buildFallbackAnalysisResult, buildMockResultsModel } from "@/lib/mock-results";
+import {
+  ResultsEmptyState,
+  ResultsErrorState,
+  ResultsLoadingState,
+  ResultsProcessingState
+} from "@/components/results/results-states";
 import { isValidHttpUrl } from "@/lib/utils";
-import type { AnalysisResult, ResultsViewModel } from "@/types";
+import type { ProcessingJobStatus, ResultsViewModel } from "@/types";
 
 type PageState =
-  | { status: "empty" }
+  | { status: "idle" }
   | { status: "loading" }
-  | { status: "error"; message: string }
-  | { status: "ready"; data: ResultsViewModel; warning: string | null };
+  | { status: "processing"; jobId: string; stage: Extract<ProcessingJobStatus, "queued" | "crawling" | "scoring">; message: string }
+  | { status: "complete"; data: ResultsViewModel; warning: string | null }
+  | { status: "error"; message: string };
 
-export function ResultsPageClient() {
-  const searchParams = useSearchParams();
-  const [state, setState] = useState<PageState>({ status: "empty" });
+type JobPayload = {
+  job?: {
+    id: string;
+    url: string;
+    status: ProcessingJobStatus;
+    message: string;
+    cached: boolean;
+    error?: string | null;
+    result?: ResultsViewModel | null;
+  };
+  error?: string;
+};
+
+type ResultsPageClientProps = {
+  initialUrl: string;
+};
+
+export function ResultsPageClient({ initialUrl }: ResultsPageClientProps) {
+  const [state, setState] = useState<PageState>({ status: "idle" });
+  const pollingJobId = state.status === "processing" ? state.jobId : null;
 
   useEffect(() => {
-    const requestedUrl = searchParams.get("url")?.trim() ?? "";
+    const requestedUrl = initialUrl.trim();
 
     if (!requestedUrl) {
-      setState({ status: "empty" });
+      setState({ status: "idle" });
       return;
     }
 
@@ -50,37 +71,43 @@ export function ResultsPageClient() {
           body: JSON.stringify({ url: requestedUrl })
         });
 
-        const payload = (await response.json().catch(() => ({}))) as { error?: string; product?: AnalysisResult };
+        const payload = (await response.json().catch(() => ({}))) as JobPayload;
+        const job = payload.job;
 
-        if (!cancelled && response.ok && payload.product) {
+        if (!response.ok || !job) {
+          if (!cancelled) {
+            setState({
+              status: "error",
+              message: payload.error ?? "Failed to start product processing."
+            });
+          }
+          return;
+        }
+
+        if (job.status === "complete" && job.result) {
           setState({
-            status: "ready",
-            data: buildMockResultsModel(payload.product),
-            warning: "Showing in-memory evidence and scoring until crawler-backed source data is available."
+            status: "complete",
+            data: job.result,
+            warning: job.cached ? "Loaded from cached results." : job.message === "Results ready." ? null : job.message
           });
           return;
         }
 
-        console.warn("[results] ingest unavailable, falling back to in-memory mock results", {
-          requestedUrl,
-          error: payload.error
-        });
-
         if (!cancelled) {
           setState({
-            status: "ready",
-            data: buildMockResultsModel(buildFallbackAnalysisResult(requestedUrl)),
-            warning: "Saved product data is unavailable right now. Displaying fallback in-memory results so you can still review the scoring layout."
+            status: "processing",
+            jobId: job.id,
+            stage: job.status as Extract<ProcessingJobStatus, "queued" | "crawling" | "scoring">,
+            message: job.message
           });
         }
       } catch (error) {
-        console.error("[results] failed to load results", error);
+        console.error("[results] failed to start processing", error);
 
         if (!cancelled) {
           setState({
-            status: "ready",
-            data: buildMockResultsModel(buildFallbackAnalysisResult(requestedUrl)),
-            warning: "Live ingest failed in this environment. Displaying fallback in-memory results instead of an error."
+            status: "error",
+            message: "Unable to start processing for this product URL."
           });
         }
       }
@@ -91,28 +118,105 @@ export function ResultsPageClient() {
     return () => {
       cancelled = true;
     };
-  }, [searchParams]);
+  }, [initialUrl]);
+
+  useEffect(() => {
+    if (state.status !== "processing") {
+      return;
+    }
+
+    const jobId = state.jobId;
+    let cancelled = false;
+
+    async function pollStatus() {
+      try {
+        const response = await fetch(`/api/status?jobId=${encodeURIComponent(jobId)}`, {
+          cache: "no-store"
+        });
+        const payload = (await response.json().catch(() => ({}))) as JobPayload;
+        const job = payload.job;
+
+        if (!response.ok || !job) {
+          if (!cancelled) {
+            setState({
+              status: "error",
+              message: payload.error ?? "Unable to fetch job status."
+            });
+          }
+          return;
+        }
+
+        if (job.status === "complete" && job.result) {
+          if (!cancelled) {
+            setState({
+              status: "complete",
+              data: job.result,
+              warning: job.cached ? "Loaded from cached results." : job.message === "Results ready." ? null : job.message
+            });
+          }
+          return;
+        }
+
+        if (job.status === "failed") {
+          if (!cancelled) {
+            setState({
+              status: "error",
+              message: job.error ?? "The processing job failed."
+            });
+          }
+          return;
+        }
+
+        if (!cancelled) {
+          setState({
+            status: "processing",
+            jobId: job.id,
+            stage: job.status as Extract<ProcessingJobStatus, "queued" | "crawling" | "scoring">,
+            message: job.message
+          });
+          window.setTimeout(() => {
+            void pollStatus();
+          }, 1200);
+        }
+      } catch (error) {
+        console.error("[results] polling failed", error);
+
+        if (!cancelled) {
+          setState({
+            status: "error",
+            message: "Lost connection while waiting for results."
+          });
+        }
+      }
+    }
+
+    void pollStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pollingJobId, state.status]);
 
   return (
     <section className="space-y-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <p className="text-sm font-medium uppercase tracking-[0.2em] text-foreground/45">TrueScore</p>
-          <h1 className="mt-2 font-heading text-3xl font-semibold tracking-tight sm:text-4xl">Results</h1>
+          <p className="text-sm font-medium uppercase tracking-[0.2em] text-gray-500">TrueScore</p>
+          <h1 className="mt-2 font-heading text-3xl font-semibold tracking-tight text-white sm:text-4xl">Results</h1>
         </div>
         <Link
           href="/"
-          className="inline-flex rounded-full border border-border bg-white px-4 py-2 text-sm font-semibold text-foreground transition hover:border-foreground/20"
+          className="inline-flex rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white transition hover:border-white/20 hover:bg-white/8"
         >
           Analyze another URL
         </Link>
       </div>
 
       {state.status === "loading" ? <ResultsLoadingState /> : null}
-      {state.status === "empty" ? <ResultsEmptyState /> : null}
+      {state.status === "idle" ? <ResultsEmptyState /> : null}
+      {state.status === "processing" ? <ResultsProcessingState status={state.stage} message={state.message} /> : null}
       {state.status === "error" ? <ResultsErrorState message={state.message} /> : null}
-      {state.status === "ready" ? <ResultsDashboard data={state.data} warning={state.warning} /> : null}
+      {state.status === "complete" ? <ResultsDashboard data={state.data} warning={state.warning} /> : null}
     </section>
   );
 }
-
