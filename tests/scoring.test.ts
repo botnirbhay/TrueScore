@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 
+
 import { scoreProduct } from "../lib/scoring.ts";
 import type { CollectedOffer, CollectedReviewSnippet, CollectibleProductInput } from "../types/entities";
 
