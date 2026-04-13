@@ -183,7 +183,7 @@ async function persistCollectedData(result: Omit<CollectorRunResult, "persisted"
   await prisma.product.update({
     where: { id: productRecord.id },
     data: {
-      crawlStatus: "SUCCEEDED",
+      crawlStatus: result.reviewCount === 0 && result.offerCount === 0 ? "PARTIAL" : "SUCCEEDED",
       lastCrawledAt: new Date()
     }
   });
@@ -206,11 +206,22 @@ async function main() {
     product: collected.product,
     startedAt,
     finishedAt: new Date().toISOString(),
+    searchQueries: collected.searchQueries,
+    pagesFound: collected.pagesFound,
+    validMatches: collected.validMatches,
     reviewCount: collected.reviewCount,
     offerCount: collected.offerCount,
     sourcesVisited: collected.sourcesVisited,
     sourcesCollected: collected.sourcesCollected
   };
+
+  console.log("[collector] finished collection", {
+    searchQueries: collected.searchQueries,
+    pagesFound: collected.pagesFound,
+    validMatches: collected.validMatches,
+    reviews: collected.reviewCount,
+    offers: collected.offerCount
+  });
 
   if (!process.env.DATABASE_URL) {
     const output: CollectorRunResult = {

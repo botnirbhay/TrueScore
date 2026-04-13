@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 
+import { Prisma } from "@prisma/client";
+
 import { getCachedResult, getCacheKey, setCachedResult } from "@/lib/cache";
 import { collectFromAllowlistedSources } from "@/lib/crawler";
-import { buildFallbackAnalysisResult, buildMockResultsModel, buildResultsModelFromEvidence } from "@/lib/mock-results";
+import { buildFallbackAnalysisResult, buildResultsModelFromEvidence } from "@/lib/mock-results";
 import { parseProductMetadataFromHtml } from "@/lib/parser";
 import { prisma } from "@/lib/prisma";
-import { scoreProduct } from "@/lib/scoring";
 import { isValidHttpUrl } from "@/lib/utils";
 import type { AnalysisResult, ProcessingJob, ResultsViewModel } from "@/types";
 
@@ -14,6 +15,14 @@ const urlToJobId = new Map<string, string>();
 
 function now() {
   return new Date().toISOString();
+}
+
+function toPrismaJson(value: Record<string, unknown> | null) {
+  if (!value) {
+    return undefined;
+  }
+
+  return value as Prisma.InputJsonValue;
 }
 
 function createJob(url: string, overrides: Partial<ProcessingJob> = {}) {
@@ -114,7 +123,7 @@ async function persistProduct(product: AnalysisResult) {
           brand: product.brand,
           imageUrl: product.image,
           description: product.description,
-          metadata: product.metadata,
+          metadata: toPrismaJson(product.metadata),
           crawlStatus: "RUNNING",
           lastCrawledAt: new Date()
         }
@@ -134,7 +143,7 @@ async function persistProduct(product: AnalysisResult) {
         brand: product.brand,
         imageUrl: product.image,
         description: product.description,
-        metadata: product.metadata,
+        metadata: toPrismaJson(product.metadata),
         crawlStatus: "RUNNING",
         lastCrawledAt: new Date()
       }
@@ -248,21 +257,18 @@ async function runPipeline(jobId: string) {
         url: job.url,
         reviews: reviewSnippets.length,
         offers: offers.length,
-        visited: collected.sourcesVisited
+        visited: collected.sourcesVisited,
+        searchQueries: collected.searchQueries,
+        pagesFound: collected.pagesFound,
+        validMatches: collected.validMatches
       });
 
       if (reviewSnippets.length === 0 && offers.length === 0) {
-        const fallback = buildMockResultsModel(persistedProduct);
-        reviewSnippets = fallback.reviewSnippets;
-        offers = fallback.offers;
-        warning = "Crawler returned no structured evidence. Showing fallback in-memory evidence for MVP continuity.";
+        warning = "Crawler returned no structured evidence. Showing partial product metadata with low confidence.";
       }
     } catch (error) {
-      console.warn("[crawler] collector failed, using fallback in-memory evidence", { url: job.url, error });
-      const fallback = buildMockResultsModel(persistedProduct);
-      reviewSnippets = fallback.reviewSnippets;
-      offers = fallback.offers;
-      warning = "Crawler failed in this environment. Showing fallback in-memory evidence.";
+      console.warn("[crawler] collector failed; returning partial live metadata only", { url: job.url, error });
+      warning = "Crawler failed in this environment. Showing partial live metadata with low confidence.";
     }
 
     updateJob(jobId, {
@@ -276,10 +282,7 @@ async function runPipeline(jobId: string) {
       offers: offers.length
     });
 
-    const result =
-      warning || reviewSnippets.length === 0 || offers.length === 0
-        ? buildResultsModelFromEvidence(persistedProduct, reviewSnippets, offers)
-        : buildResultsModelFromEvidence(persistedProduct, reviewSnippets, offers);
+    const result = buildResultsModelFromEvidence(persistedProduct, reviewSnippets, offers);
 
     setCachedResult(job.url, result);
 

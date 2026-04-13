@@ -26,6 +26,7 @@ type NormalizedOffer = {
   price: number | null;
   shipping: number | null;
   totalPrice: number | null;
+  observedAt: string | null;
 };
 
 type DimensionSignals = {
@@ -109,7 +110,8 @@ function normalizeOffer(offer: OfferEntity | CollectedOffer): NormalizedOffer {
     currency: offer.currency,
     price,
     shipping,
-    totalPrice: total ?? (price !== null ? price + (shipping ?? 0) : null)
+    totalPrice: total ?? (price !== null ? price + (shipping ?? 0) : null),
+    observedAt: "collectedAt" in offer ? offer.collectedAt : offer.observedAt
   };
 }
 
@@ -121,7 +123,8 @@ function computeLowestPrice(offers: NormalizedOffer[]): LowestPriceResult {
       amount: null,
       currency: null,
       sourceSite: null,
-      offerUrl: null
+      offerUrl: null,
+      observedAt: null
     };
   }
 
@@ -131,8 +134,19 @@ function computeLowestPrice(offers: NormalizedOffer[]): LowestPriceResult {
     amount: lowest.totalPrice,
     currency: lowest.currency,
     sourceSite: lowest.sourceSite,
-    offerUrl: lowest.offerUrl
+    offerUrl: lowest.offerUrl,
+    observedAt: lowest.observedAt
   };
+}
+
+function computeAverageRating(reviews: NormalizedReview[]) {
+  const ratings = reviews.map((review) => review.rating).filter((rating): rating is number => rating !== null);
+
+  if (ratings.length === 0) {
+    return null;
+  }
+
+  return ratings.reduce((sum, rating) => sum + rating, 0) / ratings.length;
 }
 
 function dimensionRelevant(dimension: DimensionKey, productText: string, reviews: NormalizedReview[], rules: ScoringRules) {
@@ -246,6 +260,54 @@ function offerCoverageContribution(offers: NormalizedOffer[], rules: ScoringRule
   return Math.min(rules.evidenceWeights.offerCoverageBonus, validOffers.length * 2.5);
 }
 
+function reviewConsensusContribution(reviews: NormalizedReview[]) {
+  const ratings = reviews.map((review) => review.rating).filter((rating): rating is number => rating !== null);
+
+  if (ratings.length < 2) {
+    return 0;
+  }
+
+  const average = ratings.reduce((sum, rating) => sum + rating, 0) / ratings.length;
+  const variance = ratings.reduce((sum, rating) => sum + (rating - average) ** 2, 0) / ratings.length;
+  const deviation = Math.sqrt(variance);
+
+  if (deviation <= 0.35 && average >= 4) {
+    return 8;
+  }
+
+  if (deviation <= 0.7 && average >= 3.6) {
+    return 4;
+  }
+
+  if (deviation >= 1.3) {
+    return -6;
+  }
+
+  return 0;
+}
+
+function offerConsistencyContribution(offers: NormalizedOffer[]) {
+  const totals = offers.map((offer) => offer.totalPrice).filter((price): price is number => price !== null);
+
+  if (totals.length < 2) {
+    return 0;
+  }
+
+  const min = Math.min(...totals);
+  const max = Math.max(...totals);
+  const spreadRatio = min > 0 ? (max - min) / min : 0;
+
+  if (spreadRatio <= 0.1) {
+    return 4;
+  }
+
+  if (spreadRatio >= 0.4) {
+    return -4;
+  }
+
+  return 0;
+}
+
 function detectConflictPenalty(
   reviews: NormalizedReview[],
   dimensions: Record<DimensionKey, DimensionSignals>,
@@ -281,13 +343,11 @@ function detectConflictPenalty(
 }
 
 function averageRatingPenalty(reviews: NormalizedReview[]) {
-  const ratings = reviews.map((review) => review.rating).filter((rating): rating is number => rating !== null);
+  const averageRating = computeAverageRating(reviews);
 
-  if (ratings.length === 0) {
+  if (averageRating === null) {
     return 0;
   }
-
-  const averageRating = ratings.reduce((sum, rating) => sum + rating, 0) / ratings.length;
 
   if (averageRating >= 4) {
     return 0;
@@ -312,16 +372,39 @@ function confidenceFromEvidence(
 ) {
   const sourceCount = new Set([...reviews.map((review) => review.sourceSite), ...offers.map((offer) => offer.sourceSite)]).size;
   const metadataFields = [product.title, product.brand, product.description, product.imageUrl ?? null].filter(Boolean).length;
+  const consensusContribution = reviewConsensusContribution(reviews);
+  const offerContribution = offerConsistencyContribution(offers);
+  const conflictPenalty = detectConflictPenalty(
+    reviews,
+    {
+      fit: collectDimensionSignals("fit", reviews, getTextCorpus(product), rules),
+      color: collectDimensionSignals("color", reviews, getTextCorpus(product), rules),
+      material: collectDimensionSignals("material", reviews, getTextCorpus(product), rules)
+    },
+    rules
+  );
 
-  let score = 35;
-  score += Math.min(25, reviews.length * 6);
-  score += Math.min(15, offers.length * 5);
-  score += Math.min(15, sourceCount * 5);
-  score += metadataFields * 2.5;
+  let score = 18;
+  score += Math.min(28, reviews.length * 5);
+  score += Math.min(18, offers.length * 4);
+  score += Math.min(18, sourceCount * 6);
+  score += metadataFields * 4;
+  score += Math.max(-6, consensusContribution);
+  score += Math.max(-4, offerContribution);
 
-  if (sourceCount < rules.detailThresholds.strongSourceCount || reviews.length === 0) {
+  if (sourceCount < rules.detailThresholds.strongSourceCount) {
     score -= rules.evidenceWeights.lowEvidencePenalty;
   }
+
+  if (reviews.length === 0) {
+    score -= rules.evidenceWeights.lowEvidencePenalty;
+  }
+
+  if (offers.length === 0) {
+    score -= Math.round(rules.evidenceWeights.lowEvidencePenalty / 2);
+  }
+
+  score -= Math.min(18, conflictPenalty);
 
   return roundScore(score);
 }
@@ -407,6 +490,30 @@ export function scoreProduct(
         : "No offer evidence was available."
   });
 
+  const reviewConsensus = reviewConsensusContribution(reviews);
+  if (reviewConsensus !== 0) {
+    breakdown.push({
+      label: "review-consensus",
+      impact: reviewConsensus,
+      reason:
+        reviewConsensus > 0
+          ? "Reviews were directionally consistent, which improved trust."
+          : "Review sentiment was inconsistent, which weakened trust."
+    });
+  }
+
+  const offerConsistency = offerConsistencyContribution(offers);
+  if (offerConsistency !== 0) {
+    breakdown.push({
+      label: "offer-consistency",
+      impact: offerConsistency,
+      reason:
+        offerConsistency > 0
+          ? "Comparable offers were priced in a tight range."
+          : "Offer pricing varied widely across sites."
+    });
+  }
+
   const conflictPenalty = detectConflictPenalty(reviews, dimensionSignals, rules);
   if (conflictPenalty > 0) {
     breakdown.push({
@@ -426,9 +533,19 @@ export function scoreProduct(
   }
 
   let overall =
-    rules.baseScore + reviewContribution + diversityContribution + metadataContribution + offerContribution - conflictPenalty - ratingPenalty;
+    rules.baseScore +
+    reviewContribution +
+    diversityContribution +
+    metadataContribution +
+    offerContribution +
+    reviewConsensus +
+    offerConsistency -
+    conflictPenalty -
+    ratingPenalty;
 
-  if (reviews.length === 0) {
+  if (reviews.length === 0 && offers.length === 0) {
+    overall -= rules.evidenceWeights.lowEvidencePenalty * 1.5;
+  } else if (reviews.length === 0) {
     overall -= rules.evidenceWeights.lowEvidencePenalty;
   }
 

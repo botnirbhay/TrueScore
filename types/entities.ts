@@ -139,6 +139,7 @@ export type CollectibleProductInput = {
   brand?: string | null;
   normalizedBrand?: string | null;
   normalizedSku?: string | null;
+  searchQuery?: string | null;
   sourceSite?: string | null;
 };
 
@@ -149,8 +150,9 @@ export type SourceSearchConfig = {
   label: string;
   domain: string;
   kind: CollectorSourceType;
-  searchUrl: (query: string) => string;
+  aliases?: string[];
   allowedPathPrefixes?: string[];
+  blockedPathKeywords?: string[];
 };
 
 export type CollectedReviewSnippet = {
@@ -198,6 +200,9 @@ export type CollectorRunResult = {
   finishedAt: string;
   persisted: boolean;
   productId: string | null;
+  searchQueries?: string[];
+  pagesFound?: number;
+  validMatches?: number;
   reviewCount: number;
   offerCount: number;
   sourcesVisited: number;
@@ -209,6 +214,7 @@ export type LowestPriceResult = {
   currency: string | null;
   sourceSite: string | null;
   offerUrl: string | null;
+  observedAt: string | null;
 };
 
 export type ProductScoringInput = {

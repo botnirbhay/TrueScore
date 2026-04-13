@@ -83,6 +83,7 @@ runTest("scores strong multi-source evidence highly", () => {
 
   assert.equal(result.lowestPrice.amount, 94.99);
   assert.equal(result.lowestPrice.sourceSite, "walmart.com");
+  assert.equal(result.lowestPrice.observedAt, "2026-04-11T00:00:00.000Z");
   assert.ok(result.overallTrustScore >= 75);
   assert.ok(result.confidenceScore >= 70);
   assert.ok(result.fitQualityScore !== null && result.fitQualityScore >= 70);

@@ -5,6 +5,9 @@ type ParsedProductMetadata = {
   image: string | null;
   price: string | null;
   brand: string | null;
+  sku: string | null;
+  ratingValue: number | null;
+  reviewCount: number | null;
   metadata: {
     sourceSite: string;
     currency: string | null;
@@ -15,6 +18,9 @@ type ParsedProductMetadata = {
     image: string | null;
     price: string | null;
     brand: string | null;
+    sku: string | null;
+    ratingValue: number | null;
+    reviewCount: number | null;
   };
 };
 
@@ -34,6 +40,15 @@ function cleanText(value: string | null | undefined) {
 
   const cleaned = decodeHtml(value).replace(/\s+/g, " ").trim();
   return cleaned || null;
+}
+
+function toNumber(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const match = value.replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
+  return match ? Number(match[0]) : null;
 }
 
 function toAbsoluteUrl(value: string | null, baseUrl: string) {
@@ -121,6 +136,20 @@ function readStringValue(record: Record<string, unknown>, key: string) {
   return null;
 }
 
+function readNumberValue(record: Record<string, unknown>, key: string) {
+  const value = record[key];
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    return toNumber(value);
+  }
+
+  return null;
+}
+
 function readJsonLdProductData(html: string) {
   const objects = readJsonLdObjects(html);
 
@@ -148,10 +177,18 @@ function readJsonLdProductData(html: string) {
       Array.isArray(record.offers) && record.offers.length > 0 ? asRecord(record.offers[0]) : null;
     const offerRecord = offers ?? aggregateOffer;
 
+    const aggregateRating = asRecord(record.aggregateRating);
+
     return {
       title: readStringValue(record, "name"),
       description: readStringValue(record, "description"),
       brand: readStringValue(record, "brand"),
+      sku:
+        readStringValue(record, "sku") ??
+        readStringValue(record, "mpn") ??
+        readStringValue(record, "gtin13") ??
+        readStringValue(record, "gtin12") ??
+        readStringValue(record, "gtin14"),
       image:
         typeof record.image === "string"
           ? cleanText(record.image)
@@ -159,11 +196,59 @@ function readJsonLdProductData(html: string) {
             ? cleanText(record.image[0])
             : null,
       price: offerRecord ? readStringValue(offerRecord, "price") : null,
-      currency: offerRecord ? readStringValue(offerRecord, "priceCurrency") : null
+      currency: offerRecord ? readStringValue(offerRecord, "priceCurrency") : null,
+      ratingValue: aggregateRating ? readNumberValue(aggregateRating, "ratingValue") : null,
+      reviewCount: (aggregateRating ? readNumberValue(aggregateRating, "reviewCount") : null) ?? (aggregateRating ? readNumberValue(aggregateRating, "ratingCount") : null)
     };
   }
 
   return null;
+}
+
+function detectSkuFromHtml(html: string) {
+  const metaSku =
+    readMetaTag(html, "itemprop", "sku") ??
+    readMetaTag(html, "itemprop", "mpn") ??
+    readMetaTag(html, "name", "sku") ??
+    readMetaTag(html, "name", "mpn");
+
+  if (metaSku) {
+    return cleanText(metaSku);
+  }
+
+  const regexes = [
+    /"sku"\s*:\s*"([^"]+)"/i,
+    /"mpn"\s*:\s*"([^"]+)"/i,
+    /\bSKU\b[^A-Z0-9]{0,10}([A-Z0-9-]{4,})/i,
+    /\bModel\b[^A-Z0-9]{0,10}([A-Z0-9-]{4,})/i
+  ];
+
+  for (const regex of regexes) {
+    const match = html.match(regex);
+    if (match?.[1]) {
+      return cleanText(match[1]);
+    }
+  }
+
+  return null;
+}
+
+function detectRatingFromHtml(html: string) {
+  const metaRating =
+    readMetaTag(html, "itemprop", "ratingValue") ??
+    cleanText(html.match(/"ratingValue"\s*:\s*"?(\\?\d+(?:\.\d+)?)"?/i)?.[1]) ??
+    cleanText(html.match(/aria-label=["'][^"']*?(\d+(?:\.\d+)?)\s*(?:out of|\/)\s*5/i)?.[1]);
+
+  return toNumber(metaRating);
+}
+
+function detectReviewCountFromHtml(html: string) {
+  const metaCount =
+    readMetaTag(html, "itemprop", "reviewCount") ??
+    cleanText(html.match(/"reviewCount"\s*:\s*"?(\\?\d[\d,]*)"?/i)?.[1]) ??
+    cleanText(html.match(/"ratingCount"\s*:\s*"?(\\?\d[\d,]*)"?/i)?.[1]);
+
+  return metaCount ? Math.round(toNumber(metaCount) ?? NaN) || null : null;
 }
 
 function detectPriceFromHtml(html: string) {
@@ -209,6 +294,20 @@ export function normalizeProductTitle(value: string) {
     .trim();
 }
 
+export function normalizeBrand(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s&-]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function normalizeSku(value: string) {
+  return value
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "");
+}
+
 export function parseProductMetadataFromHtml(html: string, originalUrl: string): ParsedProductMetadata {
   const url = new URL(originalUrl);
   const jsonLd = readJsonLdProductData(html);
@@ -252,15 +351,29 @@ export function parseProductMetadataFromHtml(html: string, originalUrl: string):
     extractionSignals.push("brand");
   }
 
+  const sku = jsonLd?.sku ?? detectSkuFromHtml(html) ?? null;
+  if (sku) {
+    extractionSignals.push("sku");
+  }
+
   const price = jsonLd?.price ?? detectPriceFromHtml(html) ?? null;
   if (price) {
     extractionSignals.push("price");
   }
 
   const currency = jsonLd?.currency ?? detectCurrencyFromHtml(html) ?? null;
+  const ratingValue = jsonLd?.ratingValue ?? detectRatingFromHtml(html);
+  if (ratingValue !== null) {
+    extractionSignals.push("rating");
+  }
+
+  const reviewCount = jsonLd?.reviewCount ?? detectReviewCountFromHtml(html);
+  if (reviewCount !== null) {
+    extractionSignals.push("review-count");
+  }
   const normalizedTitle = title ? normalizeProductTitle(title) : null;
 
-  if (!title && !description && !resolvedImage && !price && !brand) {
+  if (!title && !description && !resolvedImage && !price && !brand && !sku && ratingValue === null) {
     throw new Error("No product metadata could be extracted from the page.");
   }
 
@@ -271,6 +384,9 @@ export function parseProductMetadataFromHtml(html: string, originalUrl: string):
     image: resolvedImage,
     price,
     brand,
+    sku,
+    ratingValue,
+    reviewCount,
     metadata: {
       sourceSite: url.hostname,
       currency,
@@ -280,7 +396,10 @@ export function parseProductMetadataFromHtml(html: string, originalUrl: string):
       description,
       image: resolvedImage,
       price,
-      brand
+      brand,
+      sku: sku ? normalizeSku(sku) : null,
+      ratingValue,
+      reviewCount
     }
   };
 }
