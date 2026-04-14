@@ -1,4 +1,5 @@
 import { DEFAULT_SCORING_RULES, type DimensionKey, type ScoringRules } from "./scoring-rules.ts";
+import { convertAmountToUsdSync, parseNumericAmount } from "./currency.ts";
 import type {
   CollectedOffer,
   CollectedReviewSnippet,
@@ -26,6 +27,11 @@ type NormalizedOffer = {
   price: number | null;
   shipping: number | null;
   totalPrice: number | null;
+  originalCurrency: string | null;
+  originalPrice: number | null;
+  exchangeRateUsed: number | null;
+  conversionTimestamp: string | null;
+  observedAt: string | null;
 };
 
 type DimensionSignals = {
@@ -60,12 +66,7 @@ function countWords(value: string) {
 }
 
 function parseMoney(value: string | null | undefined) {
-  if (!value) {
-    return null;
-  }
-
-  const normalized = value.replace(/,/g, "").match(/-?\d+(?:\.\d+)?/);
-  return normalized ? Number(normalized[0]) : null;
+  return parseNumericAmount(value);
 }
 
 function getTextCorpus(product: Partial<ProductEntity>) {
@@ -78,6 +79,28 @@ function getTextCorpus(product: Partial<ProductEntity>) {
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+function readMetadataValue(product: Partial<ProductEntity>, key: string) {
+  const metadata = product.metadata as Record<string, unknown> | null | undefined;
+
+  if (!metadata || typeof metadata !== "object") {
+    return null;
+  }
+
+  return metadata[key] ?? null;
+}
+
+function readIdentityConfidence(product: Partial<ProductEntity> | Record<string, unknown>) {
+  const direct = "identityConfidence" in product && typeof product.identityConfidence === "number" ? product.identityConfidence : null;
+  const metadataValue = "metadata" in product && product.metadata && typeof product.metadata === "object" ? (product.metadata as Record<string, unknown>).identityConfidence : null;
+  const resolved = typeof direct === "number" ? direct : typeof metadataValue === "number" ? metadataValue : null;
+
+  if (resolved === null) {
+    return null;
+  }
+
+  return clamp(resolved, 0, 1);
 }
 
 function containsAny(text: string, terms: string[]) {
@@ -99,17 +122,52 @@ function normalizeReview(review: ReviewSnippetEntity | CollectedReviewSnippet): 
 }
 
 function normalizeOffer(offer: OfferEntity | CollectedOffer): NormalizedOffer {
-  const total = parseMoney(offer.totalPrice);
-  const price = parseMoney(offer.price);
-  const shipping = parseMoney(offer.shipping);
+  const convertedTotal = "convertedTotalPriceUsd" in offer ? parseMoney(offer.convertedTotalPriceUsd) : null;
+  const convertedPrice = "convertedPriceUsd" in offer ? parseMoney(offer.convertedPriceUsd) : null;
+  const convertedShipping = "convertedShippingUsd" in offer ? parseMoney(offer.convertedShippingUsd) : null;
+  const originalTotal =
+    "originalTotalPrice" in offer ? parseMoney(offer.originalTotalPrice) : parseMoney(offer.totalPrice);
+  const originalPrice = "originalPrice" in offer ? parseMoney(offer.originalPrice) : parseMoney(offer.price);
+  const originalShipping = "originalShipping" in offer ? parseMoney(offer.originalShipping) : parseMoney(offer.shipping);
+  const originalCurrency = ("originalCurrency" in offer ? offer.originalCurrency : offer.currency) ?? offer.currency;
+  const fallbackPriceConversion =
+    convertedPrice === null ? convertAmountToUsdSync(originalPrice, originalCurrency) : null;
+  const fallbackShippingConversion =
+    convertedShipping === null && originalShipping !== null ? convertAmountToUsdSync(originalShipping, originalCurrency) : null;
+  const fallbackTotalConversion =
+    convertedTotal === null
+      ? convertAmountToUsdSync(originalTotal ?? (originalPrice !== null ? originalPrice + (originalShipping ?? 0) : null), originalCurrency)
+      : null;
+  const price = convertedPrice ?? fallbackPriceConversion?.convertedAmountUsd ?? parseMoney(offer.price);
+  const shipping = convertedShipping ?? fallbackShippingConversion?.convertedAmountUsd ?? parseMoney(offer.shipping);
+  const total =
+    convertedTotal ??
+    fallbackTotalConversion?.convertedAmountUsd ??
+    parseMoney(offer.totalPrice) ??
+    (price !== null ? price + (shipping ?? 0) : null);
+  const exchangeRateUsed =
+    ("exchangeRateUsed" in offer ? offer.exchangeRateUsed ?? null : null) ??
+    fallbackTotalConversion?.exchangeRateUsed ??
+    fallbackPriceConversion?.exchangeRateUsed ??
+    null;
+  const conversionTimestamp =
+    ("conversionTimestamp" in offer ? offer.conversionTimestamp ?? null : null) ??
+    fallbackTotalConversion?.conversionTimestamp ??
+    fallbackPriceConversion?.conversionTimestamp ??
+    null;
 
   return {
     sourceSite: offer.sourceSite,
     offerUrl: offer.offerUrl,
-    currency: offer.currency,
+    currency: "USD",
     price,
     shipping,
-    totalPrice: total ?? (price !== null ? price + (shipping ?? 0) : null)
+    totalPrice: total,
+    originalCurrency,
+    originalPrice,
+    exchangeRateUsed,
+    conversionTimestamp,
+    observedAt: "collectedAt" in offer ? offer.collectedAt : offer.observedAt
   };
 }
 
@@ -120,8 +178,13 @@ function computeLowestPrice(offers: NormalizedOffer[]): LowestPriceResult {
     return {
       amount: null,
       currency: null,
+      originalAmount: null,
+      originalCurrency: null,
+      exchangeRateUsed: null,
+      conversionTimestamp: null,
       sourceSite: null,
-      offerUrl: null
+      offerUrl: null,
+      observedAt: null
     };
   }
 
@@ -129,10 +192,25 @@ function computeLowestPrice(offers: NormalizedOffer[]): LowestPriceResult {
 
   return {
     amount: lowest.totalPrice,
-    currency: lowest.currency,
+    currency: "USD",
+    originalAmount: lowest.originalPrice,
+    originalCurrency: lowest.originalCurrency,
+    exchangeRateUsed: lowest.exchangeRateUsed,
+    conversionTimestamp: lowest.conversionTimestamp,
     sourceSite: lowest.sourceSite,
-    offerUrl: lowest.offerUrl
+    offerUrl: lowest.offerUrl,
+    observedAt: lowest.observedAt
   };
+}
+
+function computeAverageRating(reviews: NormalizedReview[]) {
+  const ratings = reviews.map((review) => review.rating).filter((rating): rating is number => rating !== null);
+
+  if (ratings.length === 0) {
+    return null;
+  }
+
+  return ratings.reduce((sum, rating) => sum + rating, 0) / ratings.length;
 }
 
 function dimensionRelevant(dimension: DimensionKey, productText: string, reviews: NormalizedReview[], rules: ScoringRules) {
@@ -237,6 +315,14 @@ function metadataCompletenessContribution(product: Partial<ProductEntity>, rules
   return (filled / fields.length) * rules.evidenceWeights.metadataCompletenessBonus;
 }
 
+function identityContribution(identityConfidence: number | null) {
+  if (identityConfidence === null) {
+    return 0;
+  }
+
+  return Math.round((identityConfidence - 0.5) * 24);
+}
+
 function offerCoverageContribution(offers: NormalizedOffer[], rules: ScoringRules) {
   if (offers.length === 0) {
     return 0;
@@ -244,6 +330,54 @@ function offerCoverageContribution(offers: NormalizedOffer[], rules: ScoringRule
 
   const validOffers = offers.filter((offer) => offer.totalPrice !== null);
   return Math.min(rules.evidenceWeights.offerCoverageBonus, validOffers.length * 2.5);
+}
+
+function reviewConsensusContribution(reviews: NormalizedReview[]) {
+  const ratings = reviews.map((review) => review.rating).filter((rating): rating is number => rating !== null);
+
+  if (ratings.length < 2) {
+    return 0;
+  }
+
+  const average = ratings.reduce((sum, rating) => sum + rating, 0) / ratings.length;
+  const variance = ratings.reduce((sum, rating) => sum + (rating - average) ** 2, 0) / ratings.length;
+  const deviation = Math.sqrt(variance);
+
+  if (deviation <= 0.35 && average >= 4) {
+    return 8;
+  }
+
+  if (deviation <= 0.7 && average >= 3.6) {
+    return 4;
+  }
+
+  if (deviation >= 1.3) {
+    return -6;
+  }
+
+  return 0;
+}
+
+function offerConsistencyContribution(offers: NormalizedOffer[]) {
+  const totals = offers.map((offer) => offer.totalPrice).filter((price): price is number => price !== null);
+
+  if (totals.length < 2) {
+    return 0;
+  }
+
+  const min = Math.min(...totals);
+  const max = Math.max(...totals);
+  const spreadRatio = min > 0 ? (max - min) / min : 0;
+
+  if (spreadRatio <= 0.1) {
+    return 4;
+  }
+
+  if (spreadRatio >= 0.4) {
+    return -4;
+  }
+
+  return 0;
 }
 
 function detectConflictPenalty(
@@ -281,13 +415,11 @@ function detectConflictPenalty(
 }
 
 function averageRatingPenalty(reviews: NormalizedReview[]) {
-  const ratings = reviews.map((review) => review.rating).filter((rating): rating is number => rating !== null);
+  const averageRating = computeAverageRating(reviews);
 
-  if (ratings.length === 0) {
+  if (averageRating === null) {
     return 0;
   }
-
-  const averageRating = ratings.reduce((sum, rating) => sum + rating, 0) / ratings.length;
 
   if (averageRating >= 4) {
     return 0;
@@ -312,16 +444,41 @@ function confidenceFromEvidence(
 ) {
   const sourceCount = new Set([...reviews.map((review) => review.sourceSite), ...offers.map((offer) => offer.sourceSite)]).size;
   const metadataFields = [product.title, product.brand, product.description, product.imageUrl ?? null].filter(Boolean).length;
+  const identityConfidence = readIdentityConfidence(product);
+  const consensusContribution = reviewConsensusContribution(reviews);
+  const offerContribution = offerConsistencyContribution(offers);
+  const conflictPenalty = detectConflictPenalty(
+    reviews,
+    {
+      fit: collectDimensionSignals("fit", reviews, getTextCorpus(product), rules),
+      color: collectDimensionSignals("color", reviews, getTextCorpus(product), rules),
+      material: collectDimensionSignals("material", reviews, getTextCorpus(product), rules)
+    },
+    rules
+  );
 
-  let score = 35;
-  score += Math.min(25, reviews.length * 6);
-  score += Math.min(15, offers.length * 5);
-  score += Math.min(15, sourceCount * 5);
-  score += metadataFields * 2.5;
+  let score = 18;
+  score += Math.min(28, reviews.length * 5);
+  score += Math.min(18, offers.length * 4);
+  score += Math.min(18, sourceCount * 6);
+  score += metadataFields * 4;
+  score += identityConfidence !== null ? (identityConfidence - 0.5) * 22 : -4;
+  score += Math.max(-6, consensusContribution);
+  score += Math.max(-4, offerContribution);
 
-  if (sourceCount < rules.detailThresholds.strongSourceCount || reviews.length === 0) {
+  if (sourceCount < rules.detailThresholds.strongSourceCount) {
     score -= rules.evidenceWeights.lowEvidencePenalty;
   }
+
+  if (reviews.length === 0) {
+    score -= rules.evidenceWeights.lowEvidencePenalty;
+  }
+
+  if (offers.length === 0) {
+    score -= Math.round(rules.evidenceWeights.lowEvidencePenalty / 2);
+  }
+
+  score -= Math.min(18, conflictPenalty);
 
   return roundScore(score);
 }
@@ -329,19 +486,37 @@ function confidenceFromEvidence(
 function buildExplanation(
   overallTrustScore: number,
   confidenceScore: number,
+  identityConfidence: number | null,
   dimensions: Record<DimensionKey, number | null>,
   lowestPrice: LowestPriceResult,
-  breakdown: ScoreExplanationPart[]
+  breakdown: ScoreExplanationPart[],
+  reviewCount: number,
+  offerCount: number,
+  sourceCount: number
 ) {
   const strongest = [...breakdown].sort((left, right) => Math.abs(right.impact) - Math.abs(left.impact)).slice(0, 3);
+  const identitySentence =
+    identityConfidence === null
+      ? "Product identity could not be fully verified."
+      : identityConfidence >= 0.8
+        ? "Product identity was confidently matched from page metadata."
+        : identityConfidence >= 0.55
+          ? "Product identity was matched with moderate confidence."
+          : "Product identity was uncertain, which lowers confidence in the result.";
+  const evidenceSentence =
+    reviewCount > 0 || offerCount > 0
+      ? `The result draws from ${reviewCount} review signals and ${offerCount} offers across ${sourceCount} sources.`
+      : "Very little live evidence was available for this item.";
   const parts = [
     `Trust score ${overallTrustScore}/100 with ${confidenceScore}/100 confidence.`,
+    identitySentence,
+    evidenceSentence,
     strongest.map((item) => item.reason).join(" "),
     dimensions.fit !== null ? `Fit/quality score: ${dimensions.fit}/100.` : null,
     dimensions.color !== null ? `Color accuracy score: ${dimensions.color}/100.` : null,
     dimensions.material !== null ? `Material/fabric score: ${dimensions.material}/100.` : null,
     lowestPrice.amount !== null && lowestPrice.sourceSite
-      ? `Lowest observed price: ${lowestPrice.amount.toFixed(2)} ${lowestPrice.currency ?? ""} at ${lowestPrice.sourceSite}.`
+      ? `Lowest observed price: $${lowestPrice.amount.toFixed(2)} at ${lowestPrice.sourceSite}.`
       : "No reliable lowest-price evidence yet."
   ]
     .filter(Boolean)
@@ -355,9 +530,12 @@ export function scoreProduct(
   rules: ScoringRules = DEFAULT_SCORING_RULES
 ): ProductScoreResult {
   const product = input.product as Partial<ProductEntity>;
+  const productWithMetadata = product as Partial<ProductEntity> & Record<string, unknown>;
   const reviews = input.reviewSnippets.map(normalizeReview);
   const offers = input.offers.map(normalizeOffer);
   const productText = getTextCorpus(product);
+  const identityConfidence = readIdentityConfidence(productWithMetadata);
+  const sourceCount = new Set([...reviews.map((review) => review.sourceSite), ...offers.map((offer) => offer.sourceSite)]).size;
 
   const dimensionSignals = {
     fit: collectDimensionSignals("fit", reviews, productText, rules),
@@ -397,6 +575,20 @@ export function scoreProduct(
         : "Sparse product metadata reduced certainty."
   });
 
+  const identitySignalImpact = identityContribution(identityConfidence);
+  if (identityConfidence !== null) {
+    breakdown.push({
+      label: "identity",
+      impact: identitySignalImpact,
+      reason:
+        identityConfidence >= 0.8
+          ? "Canonical product identity was parsed cleanly."
+          : identityConfidence >= 0.55
+            ? "Product identity was usable but not perfectly verified."
+            : "Uncertain product identity reduced confidence in downstream matching."
+    });
+  }
+
   const offerContribution = offerCoverageContribution(offers, rules);
   breakdown.push({
     label: "offers",
@@ -406,6 +598,30 @@ export function scoreProduct(
         ? "Offer coverage added commercial evidence for pricing consistency."
         : "No offer evidence was available."
   });
+
+  const reviewConsensus = reviewConsensusContribution(reviews);
+  if (reviewConsensus !== 0) {
+    breakdown.push({
+      label: "review-consensus",
+      impact: reviewConsensus,
+      reason:
+        reviewConsensus > 0
+          ? "Reviews were directionally consistent, which improved trust."
+          : "Review sentiment was inconsistent, which weakened trust."
+    });
+  }
+
+  const offerConsistency = offerConsistencyContribution(offers);
+  if (offerConsistency !== 0) {
+    breakdown.push({
+      label: "offer-consistency",
+      impact: offerConsistency,
+      reason:
+        offerConsistency > 0
+          ? "Comparable offers were priced in a tight range."
+          : "Offer pricing varied widely across sites."
+    });
+  }
 
   const conflictPenalty = detectConflictPenalty(reviews, dimensionSignals, rules);
   if (conflictPenalty > 0) {
@@ -426,9 +642,20 @@ export function scoreProduct(
   }
 
   let overall =
-    rules.baseScore + reviewContribution + diversityContribution + metadataContribution + offerContribution - conflictPenalty - ratingPenalty;
+    rules.baseScore +
+    reviewContribution +
+    diversityContribution +
+    metadataContribution +
+    identitySignalImpact +
+    offerContribution +
+    reviewConsensus +
+    offerConsistency -
+    conflictPenalty -
+    ratingPenalty;
 
-  if (reviews.length === 0) {
+  if (reviews.length === 0 && offers.length === 0) {
+    overall -= rules.evidenceWeights.lowEvidencePenalty * 1.5;
+  } else if (reviews.length === 0) {
     overall -= rules.evidenceWeights.lowEvidencePenalty;
   }
 
@@ -441,13 +668,17 @@ export function scoreProduct(
   const explanation = buildExplanation(
     overallTrustScore,
     confidenceScore,
+    identityConfidence,
     {
       fit: fitQualityScore,
       color: colorAccuracyScore,
       material: materialFabricScore
     },
     lowestPrice,
-    breakdown
+    breakdown,
+    reviews.length,
+    offers.length,
+    sourceCount
   );
 
   return {

@@ -1,3 +1,5 @@
+import { Card } from "@/components/ui/card";
+
 type EvidenceCardProps = {
   title: string;
   eyebrow?: string;
@@ -6,10 +8,10 @@ type EvidenceCardProps = {
 
 export function EvidenceCard({ title, eyebrow, children }: EvidenceCardProps) {
   return (
-    <article className="rounded-[1.8rem] border border-white/10 bg-white/[0.045] p-5 shadow-card backdrop-blur xl:p-6">
-      {eyebrow ? <p className="text-xs font-semibold uppercase tracking-[0.22em] text-gray-500">{eyebrow}</p> : null}
-      <h3 className="mt-2 font-heading text-xl font-semibold tracking-tight text-white">{title}</h3>
+    <Card className="px-5 py-5 xl:px-6 xl:py-6">
+      {eyebrow ? <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-gray-500">{eyebrow}</p> : null}
+      <h3 className="mt-2 text-[1.05rem] font-semibold tracking-[-0.03em] text-white">{title}</h3>
       <div className="mt-4">{children}</div>
-    </article>
+    </Card>
   );
 }

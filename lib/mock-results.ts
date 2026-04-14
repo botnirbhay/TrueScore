@@ -1,3 +1,4 @@
+import { inferProductIdentityFromUrl } from "./parser.ts";
 import { scoreProduct } from "./scoring.ts";
 
 import type { AnalysisResult } from "@/types";
@@ -12,13 +13,7 @@ function safeHostname(url: string) {
 }
 
 function titleFromUrl(url: string) {
-  try {
-    const pathname = new URL(url).pathname;
-    const lastSegment = pathname.split("/").filter(Boolean).at(-1) ?? "product";
-    return lastSegment.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
-  } catch {
-    return "Product";
-  }
+  return `Product from ${brandFromHostname(safeHostname(url))}`;
 }
 
 function brandFromHostname(hostname: string) {
@@ -46,12 +41,14 @@ function relevantDescriptors(text: string) {
 
 export function buildFallbackAnalysisResult(url: string): AnalysisResult {
   const hostname = safeHostname(url);
-  const title = titleFromUrl(url);
-  const brand = brandFromHostname(hostname);
+  const inferred = inferProductIdentityFromUrl(url);
+  const title = inferred.title ?? titleFromUrl(url);
+  const brand = inferred.brand ?? brandFromHostname(hostname);
 
   return {
     id: `fallback-${hostname.replace(/[^\w-]+/g, "-")}`,
     originalUrl: url,
+    canonicalUrl: inferred.canonicalUrl ?? url,
     sourceSite: hostname,
     title,
     normalizedTitle: normalizedTitle(title),
@@ -61,7 +58,11 @@ export function buildFallbackAnalysisResult(url: string): AnalysisResult {
     metadata: {
       sourceSite: hostname,
       mode: "fallback",
-      fetchedAt: new Date().toISOString()
+      fetchedAt: new Date().toISOString(),
+      rawTitle: inferred.rawTitle ?? title,
+      sku: inferred.normalizedSku,
+      normalizedBrand: inferred.normalizedBrand,
+      identityConfidence: inferred.identityConfidence ?? 0.15
     },
     createdAt: new Date().toISOString()
   };
@@ -137,6 +138,15 @@ export function buildMockResultsModel(product: AnalysisResult): ResultsViewModel
       price: "119.00",
       shipping: "0.00",
       totalPrice: "119.00",
+      originalCurrency: "USD",
+      originalPrice: "119.00",
+      originalShipping: "0.00",
+      originalTotalPrice: "119.00",
+      convertedPriceUsd: "119.00",
+      convertedShippingUsd: "0.00",
+      convertedTotalPriceUsd: "119.00",
+      exchangeRateUsed: 1,
+      conversionTimestamp: now,
       availability: "in stock",
       qualityTags: ["direct-source"],
       confidenceScore: 0.8,
@@ -151,6 +161,15 @@ export function buildMockResultsModel(product: AnalysisResult): ResultsViewModel
       price: "109.00",
       shipping: "6.00",
       totalPrice: "115.00",
+      originalCurrency: "USD",
+      originalPrice: "109.00",
+      originalShipping: "6.00",
+      originalTotalPrice: "115.00",
+      convertedPriceUsd: "109.00",
+      convertedShippingUsd: "6.00",
+      convertedTotalPriceUsd: "115.00",
+      exchangeRateUsed: 1,
+      conversionTimestamp: now,
       availability: "available",
       qualityTags: ["marketplace"],
       confidenceScore: 0.7,
@@ -165,6 +184,15 @@ export function buildMockResultsModel(product: AnalysisResult): ResultsViewModel
       price: "112.99",
       shipping: "0.00",
       totalPrice: "112.99",
+      originalCurrency: "USD",
+      originalPrice: "112.99",
+      originalShipping: "0.00",
+      originalTotalPrice: "112.99",
+      convertedPriceUsd: "112.99",
+      convertedShippingUsd: "0.00",
+      convertedTotalPriceUsd: "112.99",
+      exchangeRateUsed: 1,
+      conversionTimestamp: now,
       availability: "in stock",
       qualityTags: ["retailer"],
       confidenceScore: 0.72,
@@ -192,11 +220,13 @@ export function buildResultsModelFromEvidence(
   const score = scoreProduct({
     product: {
       originalUrl: product.originalUrl,
+      canonicalUrl: product.canonicalUrl ?? product.originalUrl,
       sourceSite: product.sourceSite,
       title: product.title,
       brand: product.brand,
       normalizedTitle: product.normalizedTitle,
-      description: product.description
+      description: product.description,
+      metadata: product.metadata
     },
     reviewSnippets,
     offers

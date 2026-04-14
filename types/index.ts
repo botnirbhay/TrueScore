@@ -1,6 +1,7 @@
 export type AnalysisResult = {
   id: string;
   originalUrl: string;
+  canonicalUrl?: string | null;
   sourceSite: string | null;
   title: string | null;
   normalizedTitle: string | null;

@@ -18,12 +18,11 @@ export default function RootLayout({ children }: RootLayoutProps) {
     <html lang="en" className="dark">
       <body className="bg-background text-foreground antialiased dark">
         <div className="relative min-h-screen overflow-hidden">
-          <div className="pointer-events-none absolute inset-x-0 top-0 h-80 bg-[radial-gradient(circle_at_top,_rgba(45,212,191,0.14),_transparent_60%)]" />
-          <div className="pointer-events-none absolute right-0 top-24 h-72 w-72 rounded-full bg-cyan-400/10 blur-3xl" />
-          <div className="pointer-events-none absolute bottom-0 left-0 h-72 w-72 rounded-full bg-blue-500/10 blur-3xl" />
-          <div className="relative mx-auto flex min-h-screen w-full max-w-7xl flex-col px-4 sm:px-6 lg:px-8">
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-80 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.06),_transparent_55%)]" />
+          <div className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-[linear-gradient(180deg,transparent,rgba(255,255,255,0.05),transparent)]" />
+          <div className="relative mx-auto flex min-h-screen w-full max-w-[1280px] flex-col px-4 sm:px-6 lg:px-8">
             <Navbar />
-            <main className="flex-1 py-10 sm:py-14">{children}</main>
+            <main className="flex-1 py-6 sm:py-8">{children}</main>
           </div>
         </div>
       </body>

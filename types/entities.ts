@@ -90,6 +90,15 @@ export type OfferEntity = {
   price: string;
   shipping: string | null;
   totalPrice: string | null;
+  originalCurrency?: string | null;
+  originalPrice?: string | null;
+  originalShipping?: string | null;
+  originalTotalPrice?: string | null;
+  convertedPriceUsd?: string | null;
+  convertedShippingUsd?: string | null;
+  convertedTotalPriceUsd?: string | null;
+  exchangeRateUsed?: number | null;
+  conversionTimestamp?: string | null;
   qualityTags: string[];
   confidenceScore: number | null;
   isPrimary: boolean;
@@ -134,11 +143,15 @@ export type CrawlJobEntity = {
 export type CollectibleProductInput = {
   id?: string;
   originalUrl: string;
+  canonicalUrl?: string | null;
   title?: string | null;
   normalizedTitle?: string | null;
   brand?: string | null;
   normalizedBrand?: string | null;
   normalizedSku?: string | null;
+  rawTitle?: string | null;
+  identityConfidence?: number | null;
+  searchQuery?: string | null;
   sourceSite?: string | null;
 };
 
@@ -149,8 +162,9 @@ export type SourceSearchConfig = {
   label: string;
   domain: string;
   kind: CollectorSourceType;
-  searchUrl: (query: string) => string;
+  aliases?: string[];
   allowedPathPrefixes?: string[];
+  blockedPathKeywords?: string[];
 };
 
 export type CollectedReviewSnippet = {
@@ -175,6 +189,15 @@ export type CollectedOffer = {
   price: string | null;
   shipping: string | null;
   totalPrice: string | null;
+  originalCurrency: string | null;
+  originalPrice: string | null;
+  originalShipping: string | null;
+  originalTotalPrice: string | null;
+  convertedPriceUsd: string | null;
+  convertedShippingUsd: string | null;
+  convertedTotalPriceUsd: string | null;
+  exchangeRateUsed: number | null;
+  conversionTimestamp: string | null;
   availability: string | null;
   qualityTags: string[];
   confidenceScore: number | null;
@@ -198,6 +221,9 @@ export type CollectorRunResult = {
   finishedAt: string;
   persisted: boolean;
   productId: string | null;
+  searchQueries?: string[];
+  pagesFound?: number;
+  validMatches?: number;
   reviewCount: number;
   offerCount: number;
   sourcesVisited: number;
@@ -207,8 +233,13 @@ export type CollectorRunResult = {
 export type LowestPriceResult = {
   amount: number | null;
   currency: string | null;
+  originalAmount?: number | null;
+  originalCurrency?: string | null;
+  exchangeRateUsed?: number | null;
+  conversionTimestamp?: string | null;
   sourceSite: string | null;
   offerUrl: string | null;
+  observedAt: string | null;
 };
 
 export type ProductScoringInput = {
