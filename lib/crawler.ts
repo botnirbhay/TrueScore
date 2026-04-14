@@ -1,6 +1,7 @@
 import { chromium, type BrowserContext, type Page } from "playwright";
 
-import { normalizeBrand, normalizeProductTitle, normalizeSku, parseProductMetadataFromHtml } from "@/lib/parser";
+import { convertAmountToUsd, detectCurrencyCode, normalizeCurrencyCode, parseNumericAmount } from "@/lib/currency";
+import { inferProductIdentityFromUrl, normalizeBrand, normalizeProductTitle, normalizeProductUrl, normalizeSku, parseProductMetadataFromHtml } from "@/lib/parser";
 import { findAllowlistedSourceByDomain, getAllowlistedSources } from "@/lib/source-allowlist";
 import type {
   CollectedOffer,
@@ -147,6 +148,16 @@ function extractDomain(url: string) {
   }
 }
 
+function getHostSearchLabel(url: string) {
+  const hostname = extractDomain(url);
+
+  if (!hostname) {
+    return "product";
+  }
+
+  return hostname.replace(/^www\./, "").split(".")[0] ?? "product";
+}
+
 function isSameHostname(left: string | null | undefined, right: string | null | undefined) {
   if (!left || !right) {
     return false;
@@ -178,29 +189,12 @@ function parseMoneyValue(value: string | null | undefined) {
     return "0.00";
   }
 
-  const match = value.replace(/,/g, "").match(/(\d+(?:\.\d+)?)/);
-  return match ? Number(match[1]).toFixed(2) : null;
+  const amount = parseNumericAmount(value);
+  return amount !== null ? amount.toFixed(2) : null;
 }
 
 function parseCurrency(value: string | null | undefined) {
-  if (!value) {
-    return null;
-  }
-
-  if (value.includes("$")) {
-    return "USD";
-  }
-
-  if (value.includes("\u00A3")) {
-    return "GBP";
-  }
-
-  if (value.includes("\u20AC")) {
-    return "EUR";
-  }
-
-  const code = value.match(/\b([A-Z]{3})\b/);
-  return code?.[1] ?? null;
+  return normalizeCurrencyCode(detectCurrencyCode(value));
 }
 
 function isBlockedText(text: string) {
@@ -331,32 +325,43 @@ function isCandidateUrlRelevant(url: string, originalHostname: string | null) {
   return looksLikeProductPath(url);
 }
 
-function buildSearchQuery(product: CollectibleProductInput) {
+function limitQueryTerms(value: string | null | undefined, count: number) {
+  return normalizeWhitespace(value)
+    ?.split(" ")
+    .filter(Boolean)
+    .slice(0, count)
+    .join(" ") ?? null;
+}
+
+export function buildSearchQuery(product: CollectibleProductInput) {
   if (product.searchQuery?.trim()) {
     return product.searchQuery.trim();
   }
 
-  const parts = [
-    product.brand ?? product.normalizedBrand ?? null,
-    product.title ?? product.normalizedTitle ?? null,
-    product.normalizedSku ?? null
-  ]
-    .filter(Boolean)
-    .map((part) => normalizeWhitespace(part)?.replace(/\b(price|review|reviews)\b/gi, "") ?? "")
-    .filter(Boolean);
-
+  const identityConfidence = product.identityConfidence ?? 0;
+  const cleanedTitle = limitQueryTerms(product.normalizedTitle ?? product.title, identityConfidence >= 0.7 ? 10 : 6);
+  const cleanedBrand = normalizeWhitespace(product.normalizedBrand ?? product.brand ?? null);
+  const cleanedSku = normalizeWhitespace(product.normalizedSku ?? null);
+  const parts = [cleanedBrand, cleanedTitle, cleanedSku].filter(Boolean) as string[];
   const query = [...new Set(parts.join(" ").split(/\s+/).filter(Boolean))].join(" ");
-  return normalizeWhitespace(`${query} price review`) ?? product.originalUrl;
+
+  if (query) {
+    return normalizeWhitespace(identityConfidence < 0.45 ? query : `${query} price review`) ?? query;
+  }
+
+  return normalizeWhitespace(`${getHostSearchLabel(product.canonicalUrl ?? product.originalUrl)} product`) ?? "product";
 }
 
 function buildSearchQueries(product: CollectibleProductInput) {
   const base = buildSearchQuery(product);
-  const title = normalizeWhitespace(product.title ?? product.normalizedTitle ?? "");
+  const title = limitQueryTerms(product.title ?? product.normalizedTitle ?? "", product.identityConfidence && product.identityConfidence < 0.45 ? 5 : 9);
   const sku = normalizeWhitespace(product.normalizedSku ?? "");
-  const queries = [
-    base,
-    normalizeWhitespace([product.brand, title, sku, "buy price reviews"].filter(Boolean).join(" "))
-  ].filter((value): value is string => Boolean(value));
+  const identityConfidence = product.identityConfidence ?? 0;
+  const alternateQuery =
+    identityConfidence < 0.45
+      ? normalizeWhitespace([product.brand ?? product.normalizedBrand, sku, title].filter(Boolean).join(" "))
+      : normalizeWhitespace([product.brand ?? product.normalizedBrand, title, sku, "buy price reviews"].filter(Boolean).join(" "));
+  const queries = [base, alternateQuery].filter((value): value is string => Boolean(value));
 
   return [...new Set(queries)].slice(0, MAX_SEARCH_QUERIES);
 }
@@ -456,7 +461,7 @@ function buildMatchResult(
   parsed: ParsedProductPage | null
 ): ProductMatchResult {
   const source = findAllowlistedSourceByDomain(extractDomain(url) ?? "");
-  const originalHostname = product.sourceSite ?? extractDomain(product.originalUrl);
+  const originalHostname = product.sourceSite ?? extractDomain(product.canonicalUrl ?? product.originalUrl);
   const expectedBrand = normalizeBrand(product.normalizedBrand ?? product.brand ?? "");
   const expectedSku = normalizeSku(product.normalizedSku ?? "");
   const expectedTitleTokens = tokenize(product.normalizedTitle ?? product.title ?? searchTitle);
@@ -620,6 +625,9 @@ async function extractOffersFromPage(
 ): Promise<CollectedOffer[]> {
   const sourceSite = extractDomain(sourceUrl) ?? "unknown";
   const bodyText = await pageText(page);
+  const detectedCurrency = normalizeCurrencyCode(
+    detectCurrencyCode(parsed?.metadata.currency, parsed?.price, bodyText.slice(0, 2000))
+  );
   const price = parsed?.price ? parseMoneyValue(parsed.price) : null;
 
   if (!price) {
@@ -628,11 +636,20 @@ async function extractOffersFromPage(
 
   const shippingLine =
     bodyText.match(
-      /(?:shipping|delivery)[^.\n]{0,50}?(free|\$ ?[\d,.]+|\u00A3 ?[\d,.]+|\u20AC ?[\d,.]+|USD ?[\d,.]+|GBP ?[\d,.]+|EUR ?[\d,.]+)/i
+      /(?:shipping|delivery)[^.\n]{0,50}?(free|\$ ?[\d,.]+|₹ ?[\d,.]+|¥ ?[\d,.]+|\u00A3 ?[\d,.]+|\u20AC ?[\d,.]+|AED ?[\d,.]+|JPY ?[\d,.]+|INR ?[\d,.]+|USD ?[\d,.]+|GBP ?[\d,.]+|EUR ?[\d,.]+|د\.إ ?[\d,.]+|دإ ?[\d,.]+)/i
     )?.[0] ?? null;
   const shipping = parseMoneyValue(shippingLine);
-  const totalPrice =
-    shipping && !Number.isNaN(Number(shipping)) ? (Number(price) + Number(shipping)).toFixed(2) : price;
+  const originalItemPrice = price;
+  const originalShippingPrice = shipping;
+  const originalTotalPrice =
+    originalItemPrice !== null
+      ? (Number(originalItemPrice) + Number(originalShippingPrice ?? "0")).toFixed(2)
+      : null;
+  const convertedPrice = await convertAmountToUsd(Number(originalItemPrice), detectedCurrency);
+  const convertedShipping =
+    originalShippingPrice !== null ? await convertAmountToUsd(Number(originalShippingPrice), detectedCurrency) : null;
+  const convertedTotal =
+    originalTotalPrice !== null ? await convertAmountToUsd(Number(originalTotalPrice), detectedCurrency) : null;
   const availability =
     bodyText.match(/\b(in stock|out of stock|available|sold out|preorder|pre-order|ships today)\b/i)?.[1] ?? null;
   const confidenceScore = clamp(
@@ -640,6 +657,20 @@ async function extractOffersFromPage(
     0.52,
     0.92
   );
+  const exchangeRateUsed =
+    convertedTotal?.exchangeRateUsed ?? convertedPrice.exchangeRateUsed ?? convertedShipping?.exchangeRateUsed ?? null;
+  const conversionTimestamp =
+    convertedTotal?.conversionTimestamp ?? convertedPrice.conversionTimestamp ?? convertedShipping?.conversionTimestamp ?? new Date().toISOString();
+
+  console.log("[collector] normalized offer", {
+    sourceUrl,
+    originalCurrency: detectedCurrency,
+    originalPrice: originalItemPrice,
+    originalShipping: originalShippingPrice,
+    exchangeRateUsed,
+    convertedPriceUsd: convertedPrice.convertedAmountUsd,
+    convertedTotalPriceUsd: convertedTotal?.convertedAmountUsd ?? null
+  });
 
   return [
     {
@@ -647,10 +678,21 @@ async function extractOffersFromPage(
       sourceUrl,
       merchantName: parsed?.brand ?? sourceSite,
       offerUrl: sourceUrl,
-      currency: parsed?.metadata.currency ?? parseCurrency(parsed?.price),
-      price,
-      shipping,
-      totalPrice,
+      currency: "USD",
+      price: convertedPrice.convertedAmountUsd !== null ? convertedPrice.convertedAmountUsd.toFixed(2) : null,
+      shipping: convertedShipping && convertedShipping.convertedAmountUsd !== null ? convertedShipping.convertedAmountUsd.toFixed(2) : null,
+      totalPrice: convertedTotal && convertedTotal.convertedAmountUsd !== null ? convertedTotal.convertedAmountUsd.toFixed(2) : null,
+      originalCurrency: detectedCurrency ?? parseCurrency(parsed?.price),
+      originalPrice: originalItemPrice,
+      originalShipping: originalShippingPrice,
+      originalTotalPrice,
+      convertedPriceUsd: convertedPrice.convertedAmountUsd !== null ? convertedPrice.convertedAmountUsd.toFixed(2) : null,
+      convertedShippingUsd:
+        convertedShipping && convertedShipping.convertedAmountUsd !== null ? convertedShipping.convertedAmountUsd.toFixed(2) : null,
+      convertedTotalPriceUsd:
+        convertedTotal && convertedTotal.convertedAmountUsd !== null ? convertedTotal.convertedAmountUsd.toFixed(2) : null,
+      exchangeRateUsed,
+      conversionTimestamp,
       availability: availability ? normalizeWhitespace(availability) : null,
       qualityTags: extractQualityTags(bodyText),
       confidenceScore,
@@ -747,30 +789,49 @@ async function crawlCandidate(
 
 export async function normalizeCollectorInput(input: CollectibleProductInput | string): Promise<CollectibleProductInput> {
   if (typeof input !== "string") {
+    const inferred = inferProductIdentityFromUrl(input.originalUrl);
+    const canonicalUrl = input.canonicalUrl ?? inferred.canonicalUrl ?? normalizeProductUrl(input.originalUrl);
+
     return {
       ...input,
-      normalizedTitle: input.normalizedTitle ?? (input.title ? normalizeProductTitle(input.title) : null),
-      normalizedBrand: input.normalizedBrand ?? (input.brand ? normalizeBrand(input.brand) : null),
-      normalizedSku: input.normalizedSku ? normalizeSku(input.normalizedSku) : null,
-      sourceSite: input.sourceSite ?? extractDomain(input.originalUrl)
+      canonicalUrl,
+      title: input.title ?? inferred.title ?? null,
+      rawTitle: input.rawTitle ?? inferred.rawTitle ?? input.title ?? null,
+      brand: input.brand ?? inferred.brand ?? null,
+      normalizedTitle:
+        input.normalizedTitle ??
+        inferred.normalizedTitle ??
+        (input.title ? normalizeProductTitle(input.title) : null),
+      normalizedBrand:
+        input.normalizedBrand ??
+        inferred.normalizedBrand ??
+        (input.brand ? normalizeBrand(input.brand) : null),
+      normalizedSku: input.normalizedSku ?? inferred.normalizedSku ?? null,
+      identityConfidence: input.identityConfidence ?? inferred.identityConfidence ?? null,
+      sourceSite: input.sourceSite ?? extractDomain(canonicalUrl)
     };
   }
 
   const originalUrl = input.trim();
 
   if (/^https?:\/\//i.test(originalUrl)) {
+    const normalizedUrl = normalizeProductUrl(originalUrl);
+    const inferred = inferProductIdentityFromUrl(originalUrl);
     const baseInput: CollectibleProductInput = {
       originalUrl,
-      normalizedTitle: null,
-      title: null,
-      brand: null,
-      normalizedBrand: null,
-      normalizedSku: null,
-      sourceSite: extractDomain(originalUrl)
+      canonicalUrl: inferred.canonicalUrl ?? normalizedUrl,
+      normalizedTitle: inferred.normalizedTitle,
+      title: inferred.title,
+      brand: inferred.brand,
+      normalizedBrand: inferred.normalizedBrand,
+      normalizedSku: inferred.normalizedSku,
+      rawTitle: inferred.rawTitle,
+      identityConfidence: inferred.identityConfidence,
+      sourceSite: extractDomain(inferred.canonicalUrl ?? normalizedUrl)
     };
 
     try {
-      const response = await fetch(originalUrl, {
+      const response = await fetch(normalizedUrl, {
         headers: {
           "user-agent": "TrueScoreCollector/0.2 (+https://truescore.local)"
         },
@@ -782,22 +843,28 @@ export async function normalizeCollectorInput(input: CollectibleProductInput | s
       }
 
       const html = await response.text();
-      const parsed = parseProductMetadataFromHtml(html, originalUrl);
+      const parsed = parseProductMetadataFromHtml(html, normalizedUrl);
 
       return {
         ...baseInput,
+        canonicalUrl: parsed.canonicalUrl ?? normalizedUrl,
         title: parsed.title,
+        rawTitle: parsed.rawTitle,
         brand: parsed.brand,
         normalizedBrand: parsed.brand ? normalizeBrand(parsed.brand) : null,
         normalizedTitle: parsed.normalizedTitle,
         normalizedSku: parsed.sku ? normalizeSku(parsed.sku) : null,
+        identityConfidence: parsed.identityConfidence,
         searchQuery: buildSearchQuery({
           ...baseInput,
+          canonicalUrl: parsed.canonicalUrl ?? originalUrl,
           title: parsed.title,
+          rawTitle: parsed.rawTitle,
           normalizedTitle: parsed.normalizedTitle,
           brand: parsed.brand,
           normalizedBrand: parsed.brand ? normalizeBrand(parsed.brand) : null,
-          normalizedSku: parsed.sku ? normalizeSku(parsed.sku) : null
+          normalizedSku: parsed.sku ? normalizeSku(parsed.sku) : null,
+          identityConfidence: parsed.identityConfidence
         })
       };
     } catch {
@@ -813,7 +880,7 @@ export async function collectFromAllowlistedSources(
   options: CrawlOptions = {}
 ) {
   const product = await normalizeCollectorInput(input);
-  const originalHostname = product.sourceSite ?? extractDomain(product.originalUrl);
+  const originalHostname = product.sourceSite ?? extractDomain(product.canonicalUrl ?? product.originalUrl);
   const searchQueries = buildSearchQueries(product);
   const candidateMap = new Map<string, SearchResult>();
   const sourcePages: CollectedSourcePage[] = [];
@@ -821,8 +888,19 @@ export async function collectFromAllowlistedSources(
   let pagesFound = 0;
   let validMatches = 0;
 
-  candidateMap.set(product.originalUrl, {
-    url: product.originalUrl,
+  console.log("[collector] normalized identity", {
+    originalUrl: product.originalUrl,
+    canonicalUrl: product.canonicalUrl ?? product.originalUrl,
+    rawTitle: product.rawTitle ?? null,
+    normalizedTitle: product.normalizedTitle ?? null,
+    brand: product.brand ?? null,
+    sku: product.normalizedSku ?? null,
+    identityConfidence: product.identityConfidence ?? null,
+    finalSearchQuery: searchQueries[0] ?? null
+  });
+
+  candidateMap.set(product.canonicalUrl ?? product.originalUrl, {
+    url: product.canonicalUrl ?? product.originalUrl,
     title: product.title ?? product.normalizedTitle ?? product.originalUrl
   });
 

@@ -13,9 +13,9 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 
 const variantClasses: Record<ButtonVariant, string> = {
   primary:
-    "border-white/10 bg-[linear-gradient(180deg,#f5f5f5_0%,#d4d4d8_100%)] text-[#09090b] shadow-[inset_0_1px_0_rgba(255,255,255,0.88),0_10px_24px_rgba(0,0,0,0.34)] hover:brightness-[1.03] active:translate-y-px active:shadow-[inset_0_1px_0_rgba(255,255,255,0.75),0_4px_12px_rgba(0,0,0,0.28)]",
+    "border-sky-200/30 bg-[linear-gradient(180deg,#eff6ff_0%,#dbeafe_42%,#bfdbfe_100%)] text-[#06111b] shadow-[inset_0_1px_0_rgba(255,255,255,0.92),0_14px_28px_rgba(56,189,248,0.18),0_8px_18px_rgba(0,0,0,0.22)] hover:-translate-y-0.5 hover:brightness-[1.03] active:translate-y-px active:scale-[0.995] active:shadow-[inset_0_1px_0_rgba(255,255,255,0.75),0_5px_12px_rgba(0,0,0,0.24)]",
   secondary:
-    "border-white/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.07)_0%,rgba(255,255,255,0.03)_100%)] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_10px_24px_rgba(0,0,0,0.24)] hover:border-white/15 hover:bg-white/[0.08] active:translate-y-px active:shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_4px_10px_rgba(0,0,0,0.22)]",
+    "border-white/12 bg-[linear-gradient(180deg,rgba(255,255,255,0.075)_0%,rgba(255,255,255,0.03)_100%)] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_10px_24px_rgba(0,0,0,0.2)] hover:-translate-y-0.5 hover:border-white/20 hover:bg-white/[0.08] active:translate-y-px active:scale-[0.995] active:shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_4px_10px_rgba(0,0,0,0.22)]",
   ghost:
     "border-transparent bg-transparent text-gray-300 shadow-none hover:border-white/10 hover:bg-white/[0.05] hover:text-white active:translate-y-px"
 };
@@ -31,7 +31,7 @@ export function Button({ children, className, variant = "primary", size = "md", 
     <button
       type={type}
       className={cn(
-        "inline-flex select-none items-center justify-center gap-2 border font-semibold tracking-[-0.01em] transition duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/60 focus-visible:ring-offset-2 focus-visible:ring-offset-[#08090c] disabled:pointer-events-none disabled:translate-y-0 disabled:opacity-55",
+        "inline-flex select-none items-center justify-center gap-2 border font-semibold tracking-[-0.01em] transition duration-200 ease-out will-change-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300/70 focus-visible:ring-offset-2 focus-visible:ring-offset-[#08090c] disabled:pointer-events-none disabled:translate-y-0 disabled:opacity-55",
         sizeClasses[size],
         variantClasses[variant],
         className

@@ -3,12 +3,13 @@ import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 
 import { getCachedResult, getCacheKey, setCachedResult } from "@/lib/cache";
-import { collectFromAllowlistedSources } from "@/lib/crawler";
+import { buildSearchQuery, collectFromAllowlistedSources } from "@/lib/crawler";
 import { buildFallbackAnalysisResult, buildResultsModelFromEvidence } from "@/lib/mock-results";
-import { parseProductMetadataFromHtml } from "@/lib/parser";
+import { normalizeProductUrl, parseProductMetadataFromHtml } from "@/lib/parser";
 import { prisma } from "@/lib/prisma";
 import { isValidHttpUrl } from "@/lib/utils";
 import type { AnalysisResult, ProcessingJob, ResultsViewModel } from "@/types";
+import type { CollectibleProductInput } from "@/types/entities";
 
 const jobs = new Map<string, ProcessingJob>();
 const urlToJobId = new Map<string, string>();
@@ -119,8 +120,11 @@ async function persistProduct(product: AnalysisResult) {
         data: {
           sourceSite: product.sourceSite,
           title: product.title,
+          canonicalUrl: product.canonicalUrl ?? product.originalUrl,
           normalizedTitle: product.normalizedTitle,
           brand: product.brand,
+          normalizedBrand:
+            typeof product.metadata?.normalizedBrand === "string" ? product.metadata.normalizedBrand : product.brand,
           imageUrl: product.image,
           description: product.description,
           metadata: toPrismaJson(product.metadata),
@@ -135,11 +139,12 @@ async function persistProduct(product: AnalysisResult) {
     const created = await prisma.product.create({
       data: {
         originalUrl: product.originalUrl,
-        canonicalUrl: product.originalUrl,
+        canonicalUrl: product.canonicalUrl ?? product.originalUrl,
         sourceSite: product.sourceSite,
         title: product.title,
         normalizedTitle: product.normalizedTitle,
-        normalizedBrand: product.brand ?? null,
+        normalizedBrand:
+          typeof product.metadata?.normalizedBrand === "string" ? product.metadata.normalizedBrand : product.brand,
         brand: product.brand,
         imageUrl: product.image,
         description: product.description,
@@ -157,9 +162,11 @@ async function persistProduct(product: AnalysisResult) {
 }
 
 async function fetchAndParseProduct(url: string): Promise<AnalysisResult> {
-  console.log("[ingest] fetching product page", { productUrl: url });
+  const normalizedUrl = normalizeProductUrl(url);
 
-  const response = await fetch(url, {
+  console.log("[ingest] fetching product page", { productUrl: url, normalizedUrl });
+
+  const response = await fetch(normalizedUrl, {
     headers: {
       "user-agent": "TrueScoreBot/0.1 (+https://truescore.local)"
     },
@@ -171,18 +178,51 @@ async function fetchAndParseProduct(url: string): Promise<AnalysisResult> {
   }
 
   const html = await response.text();
-  const parsed = parseProductMetadataFromHtml(html, url);
+  let parsed = parseProductMetadataFromHtml(html, normalizedUrl);
+
+  if (parsed.canonicalUrl && parsed.canonicalUrl !== normalizedUrl && parsed.identityConfidence < 0.8) {
+    try {
+      console.log("[ingest] following canonical product page", {
+        requestedUrl: normalizedUrl,
+        canonicalUrl: parsed.canonicalUrl
+      });
+
+      const canonicalResponse = await fetch(parsed.canonicalUrl, {
+        headers: {
+          "user-agent": "TrueScoreBot/0.1 (+https://truescore.local)"
+        },
+        cache: "no-store"
+      });
+
+      if (canonicalResponse.ok) {
+        const canonicalHtml = await canonicalResponse.text();
+        parsed = parseProductMetadataFromHtml(canonicalHtml, parsed.canonicalUrl);
+      }
+    } catch (error) {
+      console.warn("[ingest] canonical fetch failed", {
+        requestedUrl: normalizedUrl,
+        canonicalUrl: parsed.canonicalUrl,
+        error
+      });
+    }
+  }
 
   console.log("[ingest] parsed metadata", {
     productUrl: url,
+    normalizedUrl,
+    canonicalUrl: parsed.canonicalUrl,
+    rawTitle: parsed.rawTitle,
     title: parsed.title,
     brand: parsed.brand,
+    sku: parsed.sku,
+    identityConfidence: parsed.identityConfidence,
     sourceSite: parsed.metadata.sourceSite
   });
 
   return {
     id: `ingested-${randomUUID()}`,
     originalUrl: url,
+    canonicalUrl: parsed.canonicalUrl ?? normalizedUrl,
     sourceSite: parsed.metadata.sourceSite,
     title: parsed.title,
     normalizedTitle: parsed.normalizedTitle,
@@ -227,6 +267,33 @@ async function runPipeline(jobId: string) {
       return buildFallbackAnalysisResult(job.url);
     });
     const persistedProduct = await persistProduct(parsedProduct);
+    const collectorInput: CollectibleProductInput = {
+      id: persistedProduct.id,
+      originalUrl: persistedProduct.originalUrl,
+      canonicalUrl: persistedProduct.canonicalUrl ?? persistedProduct.originalUrl,
+      title: persistedProduct.title,
+      normalizedTitle: persistedProduct.normalizedTitle,
+      brand: persistedProduct.brand,
+      normalizedBrand:
+        typeof persistedProduct.metadata?.normalizedBrand === "string" ? persistedProduct.metadata.normalizedBrand : persistedProduct.brand,
+      rawTitle: typeof persistedProduct.metadata?.rawTitle === "string" ? persistedProduct.metadata.rawTitle : persistedProduct.title,
+      identityConfidence:
+        typeof persistedProduct.metadata?.identityConfidence === "number" ? persistedProduct.metadata.identityConfidence : null,
+      normalizedSku: typeof persistedProduct.metadata?.sku === "string" ? persistedProduct.metadata.sku : null,
+      sourceSite: persistedProduct.sourceSite
+    };
+    const finalSearchQuery = buildSearchQuery(collectorInput);
+
+    console.log("[ingest] normalized product identity", {
+      originalUrl: job.url,
+      normalizedUrl: normalizeProductUrl(job.url),
+      canonicalUrl: collectorInput.canonicalUrl,
+      extractedTitle: collectorInput.title ?? null,
+      extractedBrand: collectorInput.brand ?? null,
+      extractedSku: collectorInput.normalizedSku ?? null,
+      identityConfidence: collectorInput.identityConfidence ?? null,
+      finalSearchQuery
+    });
 
     updateJob(jobId, {
       status: "crawling",
@@ -241,13 +308,8 @@ async function runPipeline(jobId: string) {
     try {
       console.log("[crawler] starting collector pipeline", { url: job.url, jobId });
       const collected = await collectFromAllowlistedSources({
-        id: persistedProduct.id,
-        originalUrl: persistedProduct.originalUrl,
-        title: persistedProduct.title,
-        normalizedTitle: persistedProduct.normalizedTitle,
-        brand: persistedProduct.brand,
-        normalizedBrand: persistedProduct.brand,
-        sourceSite: persistedProduct.sourceSite
+        ...collectorInput,
+        searchQuery: finalSearchQuery
       });
 
       reviewSnippets = collected.sourcesCollected.flatMap((page) => page.reviews);
@@ -310,10 +372,11 @@ export function createOrReuseJob(url: string) {
     throw new Error("Enter a valid URL starting with http:// or https://.");
   }
 
-  const cached = getCachedResult(url);
+  const normalizedUrl = normalizeProductUrl(url);
+  const cached = getCachedResult(normalizedUrl);
   if (cached) {
-    console.log("[cache] immediate cache hit", { url });
-    return createJob(url, {
+    console.log("[cache] immediate cache hit", { url, normalizedUrl });
+    return createJob(normalizedUrl, {
       status: "complete",
       cached: true,
       message: "Loaded cached result.",
@@ -321,17 +384,17 @@ export function createOrReuseJob(url: string) {
     });
   }
 
-  const cacheKey = getCacheKey(url);
+  const cacheKey = getCacheKey(normalizedUrl);
   const activeJobId = urlToJobId.get(cacheKey);
   const activeJob = activeJobId ? jobs.get(activeJobId) : null;
 
   if (activeJob && activeJob.status !== "failed" && activeJob.status !== "complete") {
-    console.log("[job] reusing active job", { url, jobId: activeJob.id, status: activeJob.status });
+    console.log("[job] reusing active job", { url, normalizedUrl, jobId: activeJob.id, status: activeJob.status });
     return activeJob;
   }
 
-  const job = createJob(url);
-  console.log("[job] created new job", { url, jobId: job.id });
+  const job = createJob(normalizedUrl);
+  console.log("[job] created new job", { url, normalizedUrl, jobId: job.id });
   void runPipeline(job.id);
   return job;
 }

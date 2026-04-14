@@ -3,19 +3,20 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  --color-background: #08090c;
-  --color-foreground: #f4f4f5;
-  --color-muted: #a1a1aa;
-  --color-accent: #38bdf8;
-  --color-accent-strong: #0ea5e9;
-  --color-accent-soft: rgba(56, 189, 248, 0.12);
-  --color-panel: #101219;
-  --color-panel-elevated: #151821;
-  --color-border: #242833;
+  --color-background: #07090d;
+  --color-foreground: #f5f7fb;
+  --color-muted: #9ca3af;
+  --color-accent: #7dd3fc;
+  --color-accent-strong: #38bdf8;
+  --color-accent-soft: rgba(125, 211, 252, 0.14);
+  --color-panel: #0f1319;
+  --color-panel-elevated: #131922;
+  --color-border: #222a36;
   --color-danger: #f87171;
-  --shadow-card: 0 18px 48px rgba(0, 0, 0, 0.34);
-  --font-body: "Aptos", "IBM Plex Sans", "Segoe UI Variable Text", "Segoe UI", sans-serif;
-  --font-heading: "Aptos", "IBM Plex Sans", "Segoe UI Variable Display", "Segoe UI", sans-serif;
+  --shadow-card: 0 24px 60px rgba(0, 0, 0, 0.34);
+  --shadow-soft: 0 10px 30px rgba(0, 0, 0, 0.22);
+  --font-body: "IBM Plex Sans", "Aptos", "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  --font-heading: "IBM Plex Sans", "Aptos", "Segoe UI Variable Display", "Segoe UI", sans-serif;
 }
 
 :root {
@@ -38,8 +39,9 @@ body {
   color: var(--color-foreground);
   background-color: var(--color-background);
   background-image:
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.08), transparent 24%),
-    radial-gradient(circle at 85% 12%, rgba(59, 130, 246, 0.1), transparent 18%),
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.08), transparent 22%),
+    radial-gradient(circle at 82% 10%, rgba(125, 211, 252, 0.11), transparent 18%),
+    radial-gradient(circle at 12% 24%, rgba(148, 163, 184, 0.08), transparent 18%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.015), rgba(255, 255, 255, 0));
 }
 
@@ -49,11 +51,11 @@ body::before {
   inset: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
-  background-size: 56px 56px;
+    linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size: 72px 72px;
   mask-image: radial-gradient(circle at center, black 40%, transparent 92%);
-  opacity: 0.16;
+  opacity: 0.14;
 }
 
 a {
@@ -101,6 +103,29 @@ select {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes pulse-line {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scaleX(0.96);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-120%);
+  }
+
+  100% {
+    transform: translateX(120%);
   }
 }
 

@@ -13,7 +13,7 @@ import type { ProcessingJobStatus, ResultsViewModel } from "@/types";
 type PageState =
   | { status: "idle" }
   | { status: "loading" }
-  | { status: "processing"; jobId: string; stage: Extract<ProcessingJobStatus, "queued" | "crawling" | "scoring">; message: string }
+  | { status: "processing"; jobId: string }
   | { status: "complete"; data: ResultsViewModel; warning: string | null }
   | { status: "error"; message: string };
 
@@ -39,17 +39,58 @@ type AnalysisWorkspaceProps = {
   initialUrl?: string;
 };
 
-const pipelineSteps = [
-  { label: "Ingest", detail: "Normalize the source page and seed product metadata." },
-  { label: "Collect", detail: "Pull reviews, pricing evidence, and merchant signals." },
-  { label: "Score", detail: "Return a trust readout with confidence and explanation." }
+const featurePoints = ["Live market pricing", "Real review signals", "Simple decision summary"] as const;
+
+const trustPillars = [
+  {
+    title: "Score first",
+    detail: "See the overall product read immediately, with confidence attached."
+  },
+  {
+    title: "Best price surfaced",
+    detail: "The lowest live offer is highlighted up front instead of buried in a comparison table."
+  },
+  {
+    title: "Evidence kept concise",
+    detail: "Only the clearest signals are shown so the page stays easy to scan."
+  }
 ] as const;
 
-const proofPoints = [
-  "Inline processing and result reveal",
-  "Evidence-backed trust and pricing signal",
-  "Same-page workflow across desktop and mobile"
-] as const;
+const FRIENDLY_ANALYSIS_ERROR = "We couldn't analyze that product yet. Try a cleaner product page URL.";
+const FRIENDLY_MISSING_JOB_ERROR = "We couldn't keep that analysis session alive. Try analyzing the product again.";
+const FRIENDLY_CONNECTION_ERROR = "We lost the connection before results were ready. Try again.";
+
+function sanitizeCompletionWarning(message: string | null | undefined, cached: boolean) {
+  if (cached) {
+    return "Showing a recent saved result for this product.";
+  }
+
+  if (!message || message === "Results ready.") {
+    return null;
+  }
+
+  if (/low confidence|partial|no structured evidence|failed/i.test(message)) {
+    return "Live evidence was limited for this product, so confidence may be lower than usual.";
+  }
+
+  return null;
+}
+
+function friendlyErrorFromStatus(status: number, phase: "ingest" | "status" | "failed") {
+  if (phase === "status" && status === 404) {
+    return FRIENDLY_MISSING_JOB_ERROR;
+  }
+
+  if (phase === "status") {
+    return FRIENDLY_CONNECTION_ERROR;
+  }
+
+  if (phase === "failed") {
+    return FRIENDLY_ANALYSIS_ERROR;
+  }
+
+  return FRIENDLY_ANALYSIS_ERROR;
+}
 
 export function AnalysisWorkspace({ initialUrl = "" }: AnalysisWorkspaceProps) {
   const normalizedInitialUrl = initialUrl.trim();
@@ -65,15 +106,16 @@ export function AnalysisWorkspace({ initialUrl = "" }: AnalysisWorkspaceProps) {
     if (!isValidHttpUrl(normalizedInitialUrl)) {
       return {
         status: "error",
-        message: "The provided URL is invalid. Enter a full http:// or https:// product link to run analysis."
+        message: "Enter a full public product URL starting with http:// or https://."
       };
     }
 
     return { status: "loading" };
   });
   const requestCounterRef = useRef(1);
-  const pollingJobId = state.status === "processing" ? state.jobId : null;
+  const activeRequestIdRef = useRef(initialRequest?.requestId ?? -1);
   const submittedUrl = request?.url ?? null;
+  const pollingJobId = state.status === "processing" ? state.jobId : null;
   const hostLabel = useMemo(() => (submittedUrl ? extractHostname(submittedUrl) : null), [submittedUrl]);
   const shouldShowResults = state.status !== "idle" || Boolean(submittedUrl);
 
@@ -83,6 +125,7 @@ export function AnalysisWorkspace({ initialUrl = "" }: AnalysisWorkspaceProps) {
     }
 
     const requestedUrl = request.url;
+    const requestId = request.requestId;
     let cancelled = false;
 
     async function loadResults() {
@@ -100,42 +143,38 @@ export function AnalysisWorkspace({ initialUrl = "" }: AnalysisWorkspaceProps) {
         const payload = (await response.json().catch(() => ({}))) as JobPayload;
         const job = payload.job;
 
+        if (cancelled || activeRequestIdRef.current !== requestId) {
+          return;
+        }
+
         if (!response.ok || !job) {
-          if (!cancelled) {
-            setState({
-              status: "error",
-              message: payload.error ?? "Failed to start product processing."
-            });
-          }
+          setState({
+            status: "error",
+            message: friendlyErrorFromStatus(response.status, "ingest")
+          });
           return;
         }
 
         if (job.status === "complete" && job.result) {
-          if (!cancelled) {
-            setState({
-              status: "complete",
-              data: job.result,
-              warning: job.cached ? "Loaded from cached results." : job.message === "Results ready." ? null : job.message
-            });
-          }
+          setState({
+            status: "complete",
+            data: job.result,
+            warning: sanitizeCompletionWarning(job.message, job.cached)
+          });
           return;
         }
 
-        if (!cancelled) {
-          setState({
-            status: "processing",
-            jobId: job.id,
-            stage: job.status as Extract<ProcessingJobStatus, "queued" | "crawling" | "scoring">,
-            message: job.message
-          });
-        }
+        setState({
+          status: "processing",
+          jobId: job.id
+        });
       } catch (error) {
         console.error("[analysis] failed to start processing", error);
 
-        if (!cancelled) {
+        if (!cancelled && activeRequestIdRef.current === requestId) {
           setState({
             status: "error",
-            message: "Unable to start processing for this product URL."
+            message: FRIENDLY_ANALYSIS_ERROR
           });
         }
       }
@@ -149,11 +188,11 @@ export function AnalysisWorkspace({ initialUrl = "" }: AnalysisWorkspaceProps) {
   }, [request]);
 
   useEffect(() => {
-    if (state.status !== "processing") {
+    if (!pollingJobId) {
       return;
     }
 
-    const jobId = state.jobId;
+    const jobId = pollingJobId;
     let cancelled = false;
     let timerId: number | null = null;
 
@@ -165,56 +204,45 @@ export function AnalysisWorkspace({ initialUrl = "" }: AnalysisWorkspaceProps) {
         const payload = (await response.json().catch(() => ({}))) as JobPayload;
         const job = payload.job;
 
+        if (cancelled) {
+          return;
+        }
+
         if (!response.ok || !job) {
-          if (!cancelled) {
-            setState({
-              status: "error",
-              message: payload.error ?? "Unable to fetch job status."
-            });
-          }
+          setState({
+            status: "error",
+            message: friendlyErrorFromStatus(response.status, "status")
+          });
           return;
         }
 
         if (job.status === "complete" && job.result) {
-          if (!cancelled) {
-            setState({
-              status: "complete",
-              data: job.result,
-              warning: job.cached ? "Loaded from cached results." : job.message === "Results ready." ? null : job.message
-            });
-          }
+          setState({
+            status: "complete",
+            data: job.result,
+            warning: sanitizeCompletionWarning(job.message, job.cached)
+          });
           return;
         }
 
         if (job.status === "failed") {
-          if (!cancelled) {
-            setState({
-              status: "error",
-              message: job.error ?? "The processing job failed."
-            });
-          }
+          setState({
+            status: "error",
+            message: friendlyErrorFromStatus(200, "failed")
+          });
           return;
         }
 
-        if (!cancelled) {
-          setState({
-            status: "processing",
-            jobId: job.id,
-            stage: job.status as Extract<ProcessingJobStatus, "queued" | "crawling" | "scoring">,
-            message: job.message
-          });
-
-          timerId = window.setTimeout(() => {
-            void pollStatus();
-          }, 1200);
-        }
+        timerId = window.setTimeout(() => {
+          void pollStatus();
+        }, 1200);
       } catch (error) {
         console.error("[analysis] polling failed", error);
 
         if (!cancelled) {
           setState({
             status: "error",
-            message: "Lost connection while waiting for results."
+            message: FRIENDLY_CONNECTION_ERROR
           });
         }
       }
@@ -225,11 +253,11 @@ export function AnalysisWorkspace({ initialUrl = "" }: AnalysisWorkspaceProps) {
     return () => {
       cancelled = true;
 
-      if (timerId) {
+      if (timerId !== null) {
         window.clearTimeout(timerId);
       }
     };
-  }, [pollingJobId, state.status]);
+  }, [pollingJobId]);
 
   function handleAnalyze(nextUrl: string) {
     const trimmedUrl = nextUrl.trim();
@@ -240,23 +268,28 @@ export function AnalysisWorkspace({ initialUrl = "" }: AnalysisWorkspaceProps) {
     }
 
     if (!isValidHttpUrl(trimmedUrl)) {
-      setFormError("Enter a valid URL starting with http:// or https://.");
+      setFormError("Enter a valid public URL starting with http:// or https://.");
       return;
     }
+
+    const nextRequestId = requestCounterRef.current++;
 
     setFormError("");
     setUrl(trimmedUrl);
     setState({ status: "loading" });
+    activeRequestIdRef.current = nextRequestId;
 
     startTransition(() => {
       setRequest({
         url: trimmedUrl,
-        requestId: requestCounterRef.current++
+        requestId: nextRequestId
       });
     });
   }
 
   function handleClearResults() {
+    activeRequestIdRef.current = -1;
+    setUrl("");
     setRequest(null);
     setState({ status: "idle" });
     setFormError("");
@@ -265,44 +298,35 @@ export function AnalysisWorkspace({ initialUrl = "" }: AnalysisWorkspaceProps) {
   const isBusy = state.status === "loading" || state.status === "processing";
 
   return (
-    <div className="space-y-7 pb-10 sm:space-y-8 sm:pb-14">
-      <section className="grid gap-6 xl:grid-cols-[minmax(0,1.08fr)_400px]">
+    <div className="space-y-6 pb-10 sm:space-y-7 sm:pb-14">
+      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.12fr)_400px]">
         <Card className="relative overflow-hidden px-5 py-6 sm:px-7 sm:py-7">
-          <div className="pointer-events-none absolute inset-x-0 top-0 h-28 bg-[radial-gradient(circle_at_top,_rgba(120,119,198,0.15),_transparent_68%)]" />
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(125,211,252,0.12),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(255,255,255,0.05),transparent_26%)]" />
 
-          <div className="relative flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-gray-400">
-            <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] text-white">Single-page flow</span>
-            <span>Linear-inspired UI</span>
+          <div className="relative flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-gray-300">
+              TrueScore
+            </span>
+            <span className="rounded-full border border-sky-300/15 bg-sky-300/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-100">
+              Live product analysis
+            </span>
           </div>
 
           <div className="relative mt-6 max-w-3xl">
-            <h1 className="max-w-2xl text-[2rem] font-semibold tracking-[-0.06em] text-white sm:text-[3.25rem]">
-              Product trust scoring that stays in one workspace.
+            <h1 className="max-w-2xl text-[2.4rem] font-semibold tracking-[-0.075em] text-white sm:text-[4rem]">
+              Decide faster with a cleaner read on product trust.
             </h1>
-            <p className="mt-4 max-w-2xl text-sm leading-7 text-gray-400 sm:text-[15px]">
-              Submit any public product page. TrueScore ingests the listing, crawls supporting evidence, and reveals the score
-              directly below the form without breaking the flow.
+            <p className="mt-4 max-w-2xl text-[15px] leading-7 text-gray-300">
+              Paste a product URL and get one simple answer surface: the score, how confident it is, the best live price,
+              and the clearest reasons behind it.
             </p>
           </div>
 
-          <div className="relative mt-7 grid gap-3 sm:grid-cols-3">
-            {pipelineSteps.map((step, index) => (
-              <div
-                key={step.label}
-                className="rounded-[18px] border border-white/10 bg-white/[0.035] px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
-              >
-                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-gray-500">0{index + 1}</p>
-                <p className="mt-2 text-sm font-semibold text-white">{step.label}</p>
-                <p className="mt-2 text-sm leading-6 text-gray-400">{step.detail}</p>
-              </div>
-            ))}
-          </div>
-
-          <div className="relative mt-7 flex flex-wrap gap-2">
-            {proofPoints.map((point) => (
+          <div className="relative mt-8 flex flex-wrap gap-2">
+            {featurePoints.map((point) => (
               <span
                 key={point}
-                className="inline-flex items-center rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-[12px] font-medium text-gray-300"
+                className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.035] px-3 py-1.5 text-[12px] font-medium text-gray-200"
               >
                 {point}
               </span>
@@ -316,8 +340,6 @@ export function AnalysisWorkspace({ initialUrl = "" }: AnalysisWorkspaceProps) {
           isLoading={isBusy}
           activeUrl={submittedUrl}
           status={state.status}
-          processingStage={state.status === "processing" ? state.stage : null}
-          statusMessage={state.status === "processing" ? state.message : state.status === "complete" ? "Results ready inline." : null}
           onUrlChange={(value) => {
             setUrl(value);
             if (formError) {
@@ -329,62 +351,34 @@ export function AnalysisWorkspace({ initialUrl = "" }: AnalysisWorkspaceProps) {
         />
       </section>
 
-      <section className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-        <Card className="px-5 py-5 sm:px-6">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-gray-500">System</p>
-              <h2 className="mt-2 text-lg font-semibold tracking-[-0.03em] text-white">Compact workflow, same scoring pipeline</h2>
-            </div>
-            <span className="rounded-full border border-emerald-400/15 bg-emerald-400/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-300">
-              Inline reveal
-            </span>
-          </div>
-
-          <div className="mt-5 grid gap-3 md:grid-cols-3">
-            <div className="rounded-[18px] border border-white/10 bg-black/20 p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-gray-500">Input</p>
-              <p className="mt-2 text-sm font-medium text-white">Public product URL</p>
-            </div>
-            <div className="rounded-[18px] border border-white/10 bg-black/20 p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-gray-500">Engine</p>
-              <p className="mt-2 text-sm font-medium text-white">Ingest, job queue, poll, score</p>
-            </div>
-            <div className="rounded-[18px] border border-white/10 bg-black/20 p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-gray-500">Output</p>
-              <p className="mt-2 text-sm font-medium text-white">Trust result with evidence below</p>
-            </div>
-          </div>
-        </Card>
-
-        <Card className="px-5 py-5 sm:px-6">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-gray-500">Included</p>
-          <div className="mt-4 space-y-3 text-sm leading-6 text-gray-300">
-            <div className="rounded-[16px] border border-white/10 bg-black/20 px-4 py-3">Product identity, brand, image, and source URL</div>
-            <div className="rounded-[16px] border border-white/10 bg-black/20 px-4 py-3">Trust score, confidence, price floor, and breakdowns</div>
-            <div className="rounded-[16px] border border-white/10 bg-black/20 px-4 py-3">Review evidence, quality tags, and offer comparisons</div>
-          </div>
-        </Card>
+      <section className="grid gap-4 lg:grid-cols-3">
+        {trustPillars.map((pillar) => (
+          <Card key={pillar.title} className="px-5 py-5">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-gray-500">Why it works</p>
+            <h2 className="mt-3 text-[1.02rem] font-semibold tracking-[-0.03em] text-white">{pillar.title}</h2>
+            <p className="mt-2 text-sm leading-6 text-gray-400">{pillar.detail}</p>
+          </Card>
+        ))}
       </section>
 
       {shouldShowResults ? (
         <section className="space-y-4 animate-[rise-in_320ms_ease-out]">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-gray-500">Analysis output</p>
-              <h2 className="mt-1 text-xl font-semibold tracking-[-0.04em] text-white sm:text-2xl">
-                {hostLabel ? `Results for ${hostLabel}` : "Analysis results"}
+              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-gray-500">Analysis</p>
+              <h2 className="mt-1 text-[1.6rem] font-semibold tracking-[-0.05em] text-white sm:text-[2rem]">
+                {hostLabel ? `Results for ${hostLabel}` : "Your result"}
               </h2>
             </div>
             {state.status === "complete" ? (
               <Button variant="secondary" size="sm" onClick={() => handleAnalyze(url)}>
-                Re-run analysis
+                Refresh result
               </Button>
             ) : null}
           </div>
 
           {state.status === "loading" ? <ResultsLoadingState /> : null}
-          {state.status === "processing" ? <ResultsProcessingState status={state.stage} message={state.message} /> : null}
+          {state.status === "processing" ? <ResultsProcessingState /> : null}
           {state.status === "error" ? <ResultsErrorState message={state.message} /> : null}
           {state.status === "complete" ? <ResultsDashboard data={state.data} warning={state.warning} /> : null}
         </section>
